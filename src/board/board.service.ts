@@ -62,6 +62,23 @@ export class BoardService implements OnModuleDestroy {
   private readonly logger = new Logger(BoardService.name);
   private db: Database.Database | null = null;
 
+  // Simple TTL cache for kanban.db reads
+  private cache = new Map<string, { data: any; expiresAt: number }>();
+  private readonly cacheTtlMs = 3000; // 3 seconds
+
+  private getCached<T>(key: string): T | null {
+    const entry = this.cache.get(key);
+    if (entry && Date.now() < entry.expiresAt) {
+      return entry.data as T;
+    }
+    this.cache.delete(key);
+    return null;
+  }
+
+  private setCache(key: string, data: any): void {
+    this.cache.set(key, { data, expiresAt: Date.now() + this.cacheTtlMs });
+  }
+
   private getDb(): Database.Database {
     if (!this.db) {
       const dbPath = join(homedir(), '.hermes', 'kanban.db');
@@ -90,6 +107,10 @@ export class BoardService implements OnModuleDestroy {
     limit?: number;
     offset?: number;
   }): BoardTask[] {
+    const cacheKey = `tasks:${JSON.stringify(filters ?? {})}`;
+    const cached = this.getCached<BoardTask[]>(cacheKey);
+    if (cached) return cached;
+
     const db = this.getDb();
     let query = 'SELECT * FROM tasks WHERE 1=1';
     const params: any[] = [];
@@ -120,7 +141,9 @@ export class BoardService implements OnModuleDestroy {
     }
 
     const rows = db.prepare(query).all(...params) as any[];
-    return rows.map(this.mapTask);
+    const result = rows.map(this.mapTask);
+    this.setCache(cacheKey, result);
+    return result;
   }
 
   /**
@@ -176,6 +199,9 @@ export class BoardService implements OnModuleDestroy {
    * Get board stats: counts by status and assignee.
    */
   getStats(): BoardStats {
+    const cached = this.getCached<BoardStats>('stats');
+    if (cached) return cached;
+
     const db = this.getDb();
 
     const total = (db.prepare('SELECT COUNT(*) as cnt FROM tasks').get() as any).cnt;
@@ -198,7 +224,9 @@ export class BoardService implements OnModuleDestroy {
       byAssignee[row.assignee] = row.cnt;
     }
 
-    return { total, byStatus, byAssignee };
+    const result: BoardStats = { total, byStatus, byAssignee };
+    this.setCache('stats', result);
+    return result;
   }
 
   private mapTask(row: any): BoardTask {

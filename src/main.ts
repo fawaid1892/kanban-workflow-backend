@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
+import { RateLimitMiddleware } from './common/rate-limit.middleware';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -13,6 +14,10 @@ async function bootstrap() {
       transform: true,
     }),
   );
+
+  // Rate limiting: 100 req/min per IP
+  app.use(new RateLimitMiddleware().use.bind(new RateLimitMiddleware()));
+
   const port = process.env.PORT || 8080;
   await app.listen(port);
   console.log(`Backend running on port ${port}`);

@@ -19,7 +19,7 @@ import { UpdateStageDto } from './dto/update-stage.dto';
 import { SetDependenciesDto } from './dto/set-dependencies.dto';
 import { RunWorkflowDto } from './dto/run-workflow.dto';
 
-@Controller('api/workflows')
+@Controller('workflows')
 export class WorkflowsController {
   constructor(private readonly workflowsService: WorkflowsService) {}
 
