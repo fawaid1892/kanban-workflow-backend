@@ -1,8 +1,8 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
-import Database from 'better-sqlite3';
-import { existsSync } from 'fs';
-import { join } from 'path';
-import { homedir } from 'os';
+import { Injectable, Logger } from '@nestjs/common';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+const execFileAsync = promisify(execFile);
 
 export interface BoardTask {
   id: string;
@@ -58,199 +58,158 @@ export interface BoardStats {
 }
 
 @Injectable()
-export class BoardService implements OnModuleDestroy {
+export class BoardService {
   private readonly logger = new Logger(BoardService.name);
-  private db: Database.Database | null = null;
 
-  // Simple TTL cache for kanban.db reads
-  private cache = new Map<string, { data: any; expiresAt: number }>();
-  private readonly cacheTtlMs = 3000; // 3 seconds
+  // TTL cache
+  private cache = new Map<string, { data: unknown; expiresAt: number }>();
+  private readonly cacheTtlMs = 3000;
 
   private getCached<T>(key: string): T | null {
     const entry = this.cache.get(key);
-    if (entry && Date.now() < entry.expiresAt) {
-      return entry.data as T;
-    }
+    if (entry && Date.now() < entry.expiresAt) return entry.data as T;
     this.cache.delete(key);
     return null;
   }
 
-  private setCache(key: string, data: any): void {
+  private setCache(key: string, data: unknown): void {
     this.cache.set(key, { data, expiresAt: Date.now() + this.cacheTtlMs });
   }
 
-  private getDb(): Database.Database {
-    if (!this.db) {
-      const dbPath = join(homedir(), '.hermes', 'kanban.db');
-      if (!existsSync(dbPath)) {
-        throw new Error(`Kanban database not found at ${dbPath}`);
-      }
-      this.db = new Database(dbPath, { readonly: true });
-      this.logger.log(`Connected to kanban.db at ${dbPath}`);
-    }
-    return this.db;
-  }
-
-  onModuleDestroy() {
-    if (this.db) {
-      this.db.close();
-    }
-  }
-
   /**
-   * List tasks with optional filters.
+   * List tasks via `hermes kanban list --json`.
    */
-  getTasks(filters?: {
+  async getTasks(filters?: {
     status?: string;
     assignee?: string;
     search?: string;
     limit?: number;
     offset?: number;
-  }): BoardTask[] {
+  }): Promise<BoardTask[]> {
     const cacheKey = `tasks:${JSON.stringify(filters ?? {})}`;
     const cached = this.getCached<BoardTask[]>(cacheKey);
     if (cached) return cached;
 
-    const db = this.getDb();
-    let query = 'SELECT * FROM tasks WHERE 1=1';
-    const params: any[] = [];
+    try {
+      const args = ['kanban', 'list', '--json'];
+      if (filters?.status) args.push('--status', filters.status);
+      if (filters?.assignee) args.push('--assignee', filters.assignee);
 
-    if (filters?.status) {
-      query += ' AND status = ?';
-      params.push(filters.status);
-    }
-    if (filters?.assignee) {
-      query += ' AND assignee = ?';
-      params.push(filters.assignee);
-    }
-    if (filters?.search) {
-      query += ' AND (title LIKE ? OR body LIKE ?)';
-      const searchTerm = `%${filters.search}%`;
-      params.push(searchTerm, searchTerm);
-    }
+      const { stdout } = await execFileAsync('hermes', args, {
+        timeout: 15_000,
+        env: { ...process.env },
+      });
 
-    query += ' ORDER BY created_at DESC';
+      let tasks: BoardTask[] = JSON.parse(stdout.trim()).map(this.mapTask);
 
-    if (filters?.limit) {
-      query += ' LIMIT ?';
-      params.push(filters.limit);
-    }
-    if (filters?.offset) {
-      query += ' OFFSET ?';
-      params.push(filters.offset);
-    }
+      // Client-side search filter
+      if (filters?.search) {
+        const q = filters.search.toLowerCase();
+        tasks = tasks.filter(
+          (t) =>
+            t.title.toLowerCase().includes(q) ||
+            (t.body && t.body.toLowerCase().includes(q)),
+        );
+      }
 
-    const rows = db.prepare(query).all(...params) as any[];
-    const result = rows.map(this.mapTask);
-    this.setCache(cacheKey, result);
-    return result;
+      // Pagination
+      const offset = filters?.offset ?? 0;
+      const limit = filters?.limit ?? 200;
+      tasks = tasks.slice(offset, offset + limit);
+
+      this.setCache(cacheKey, tasks);
+      return tasks;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to list kanban tasks: ${message}`);
+      return [];
+    }
   }
 
   /**
-   * Get task detail with events, comments, and links.
+   * Get task detail via `hermes kanban get <id> --json`.
    */
-  getTaskDetail(taskId: string): TaskDetail | null {
-    const db = this.getDb();
+  async getTaskDetail(taskId: string): Promise<TaskDetail | null> {
+    try {
+      const { stdout } = await execFileAsync(
+        'hermes',
+        ['kanban', 'get', taskId, '--json'],
+        { timeout: 10_000, env: { ...process.env } },
+      );
 
-    const task = db
-      .prepare('SELECT * FROM tasks WHERE id = ?')
-      .get(taskId) as any;
-    if (!task) return null;
-
-    const events = db
-      .prepare('SELECT * FROM task_events WHERE task_id = ? ORDER BY created_at ASC')
-      .all(taskId) as any[];
-
-    const comments = db
-      .prepare('SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC')
-      .all(taskId) as any[];
-
-    const parentLinks = db
-      .prepare('SELECT parent_id FROM task_links WHERE child_id = ?')
-      .all(taskId) as any[];
-
-    const childLinks = db
-      .prepare('SELECT child_id FROM task_links WHERE parent_id = ?')
-      .all(taskId) as any[];
-
-    return {
-      ...this.mapTask(task),
-      events: events.map((e) => ({
-        id: e.id,
-        taskId: e.task_id,
-        runId: e.run_id,
-        kind: e.kind,
-        payload: e.payload,
-        createdAt: e.created_at,
-      })),
-      comments: comments.map((c) => ({
-        id: c.id,
-        taskId: c.task_id,
-        author: c.author,
-        body: c.body,
-        createdAt: c.created_at,
-      })),
-      parentIds: parentLinks.map((l) => l.parent_id),
-      childIds: childLinks.map((l) => l.child_id),
-    };
+      const raw = JSON.parse(stdout.trim());
+      return {
+        ...this.mapTask(raw),
+        events: (raw.events ?? []).map((e: Record<string, unknown>) => ({
+          id: e.id as number,
+          taskId: e.task_id as string,
+          runId: (e.run_id as string) ?? null,
+          kind: e.kind as string,
+          payload: (e.payload as string) ?? null,
+          createdAt: e.created_at as number,
+        })),
+        comments: (raw.comments ?? []).map((c: Record<string, unknown>) => ({
+          id: c.id as number,
+          taskId: c.task_id as string,
+          author: c.author as string,
+          body: c.body as string,
+          createdAt: c.created_at as number,
+        })),
+        parentIds: (raw.parent_ids ?? []) as string[],
+        childIds: (raw.child_ids ?? []) as string[],
+      };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to get task ${taskId}: ${message}`);
+      return null;
+    }
   }
 
   /**
-   * Get board stats: counts by status and assignee.
+   * Board stats derived from full task list.
    */
-  getStats(): BoardStats {
+  async getStats(): Promise<BoardStats> {
     const cached = this.getCached<BoardStats>('stats');
     if (cached) return cached;
 
-    const db = this.getDb();
-
-    const total = (db.prepare('SELECT COUNT(*) as cnt FROM tasks').get() as any).cnt;
-
-    const statusRows = db
-      .prepare('SELECT status, COUNT(*) as cnt FROM tasks GROUP BY status')
-      .all() as any[];
-
-    const assigneeRows = db
-      .prepare('SELECT assignee, COUNT(*) as cnt FROM tasks GROUP BY assignee')
-      .all() as any[];
+    const tasks = await this.getTasks({ limit: 1000 });
 
     const byStatus: Record<string, number> = {};
-    for (const row of statusRows) {
-      byStatus[row.status] = row.cnt;
-    }
-
     const byAssignee: Record<string, number> = {};
-    for (const row of assigneeRows) {
-      byAssignee[row.assignee] = row.cnt;
+
+    for (const t of tasks) {
+      byStatus[t.status] = (byStatus[t.status] ?? 0) + 1;
+      byAssignee[t.assignee] = (byAssignee[t.assignee] ?? 0) + 1;
     }
 
-    const result: BoardStats = { total, byStatus, byAssignee };
+    const result: BoardStats = { total: tasks.length, byStatus, byAssignee };
     this.setCache('stats', result);
     return result;
   }
 
-  private mapTask(row: any): BoardTask {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private mapTask(raw: any): BoardTask {
     return {
-      id: row.id,
-      title: row.title,
-      body: row.body,
-      assignee: row.assignee,
-      status: row.status,
-      priority: row.priority,
-      createdBy: row.created_by,
-      createdAt: row.created_at,
-      startedAt: row.started_at,
-      completedAt: row.completed_at,
-      workspaceKind: row.workspace_kind,
-      branchName: row.branch_name,
-      projectId: row.project_id,
-      result: row.result,
-      skills: row.skills ? JSON.parse(row.skills) : [],
-      maxRetries: row.max_retries,
-      goalMode: !!row.goal_mode,
-      sessionId: row.session_id,
-      workflowTemplateId: row.workflow_template_id,
-      currentStepKey: row.current_step_key,
+      id: raw.id,
+      title: raw.title,
+      body: raw.body ?? null,
+      assignee: raw.assignee ?? 'unassigned',
+      status: raw.status ?? 'unknown',
+      priority: raw.priority ?? 0,
+      createdBy: raw.created_by ?? 'unknown',
+      createdAt: raw.created_at ?? 0,
+      startedAt: raw.started_at ?? null,
+      completedAt: raw.completed_at ?? null,
+      workspaceKind: raw.workspace_kind ?? null,
+      branchName: raw.branch_name ?? null,
+      projectId: raw.project_id ?? null,
+      result: raw.result ?? null,
+      skills: Array.isArray(raw.skills) ? raw.skills : [],
+      maxRetries: raw.max_retries ?? null,
+      goalMode: !!raw.goal_mode,
+      sessionId: raw.session_id ?? null,
+      workflowTemplateId: raw.workflow_template_id ?? null,
+      currentStepKey: raw.current_step_key ?? null,
     };
   }
 }
