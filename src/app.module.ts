@@ -4,10 +4,20 @@ import { DatabaseModule } from './database/database.module';
 import { RolesModule } from './roles/roles.module';
 import { SandboxModule } from './sandbox/sandbox.module';
 import { EventsModule } from './events/events.module';
+import { ModelConfigModule } from './model-config/model-config.module';
+import { SettingsModule } from './settings/settings.module';
 import { AppController } from './app.controller';
 
 @Module({
-  imports: [ConfigModule, DatabaseModule, RolesModule, SandboxModule, EventsModule],
+  imports: [
+    ConfigModule,
+    DatabaseModule,
+    RolesModule,
+    SandboxModule,
+    EventsModule,
+    ModelConfigModule,
+    SettingsModule,
+  ],
   controllers: [AppController],
   providers: [],
 })
