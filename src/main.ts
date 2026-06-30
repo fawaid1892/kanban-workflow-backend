@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
+import { GlobalExceptionFilter } from './common/global-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -14,6 +15,7 @@ async function bootstrap() {
       transform: true,
     }),
   );
+  app.useGlobalFilters(new GlobalExceptionFilter());
 
   // Rate limiting: 100 req/min per IP
   app.use(new RateLimitMiddleware().use.bind(new RateLimitMiddleware()));
