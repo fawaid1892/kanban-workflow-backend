@@ -6,6 +6,8 @@ import { SandboxModule } from './sandbox/sandbox.module';
 import { EventsModule } from './events/events.module';
 import { ModelConfigModule } from './model-config/model-config.module';
 import { SettingsModule } from './settings/settings.module';
+import { WorkflowsModule } from './workflows/workflows.module';
+import { BoardModule } from './board/board.module';
 import { AppController } from './app.controller';
 
 @Module({
@@ -17,6 +19,8 @@ import { AppController } from './app.controller';
     EventsModule,
     ModelConfigModule,
     SettingsModule,
+    WorkflowsModule,
+    BoardModule,
   ],
   controllers: [AppController],
   providers: [],
