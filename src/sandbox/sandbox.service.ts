@@ -7,13 +7,14 @@ import {
 } from '@nestjs/common';
 import { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { eq, desc, asc, lt } from 'drizzle-orm';
-import { execSync } from 'child_process';
+import { execSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as schema from '../database/schema';
 import { DRIZZLE } from '../database/database.module';
 import { UpdateSandboxDto } from './dto/update-sandbox.dto';
+import { EventsGateway } from '../events/events.gateway';
 
 @Injectable()
 export class SandboxService {
@@ -21,6 +22,7 @@ export class SandboxService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
+    private readonly eventsGateway: EventsGateway,
   ) {}
 
   /**
@@ -41,6 +43,7 @@ export class SandboxService {
 
   /**
    * S3-02: Build a sandbox image for the given role.
+   * Streams build progress via WebSocket.
    */
   async buildImage(slug: string): Promise<{ buildId: number; status: string }> {
     // Resolve next ID first
@@ -65,9 +68,9 @@ export class SandboxService {
 
     // 3. Generate Dockerfile content
     const dockerfileContent = templateContent
-      .replace(/\$\{BASE_IMAGE\}/g, baseImage)
-      .replace(/\$\{EXTRA_PACKAGES\}/g, '')
-      .replace(/\$\{HERMES_BIN\}/g, '/usr/local/bin/hermes');
+      .replace(/\${BASE_IMAGE}/g, baseImage)
+      .replace(/\${EXTRA_PACKAGES}/g, '')
+      .replace(/\${HERMES_BIN}/g, '/usr/local/bin/hermes');
 
     // 4. Write Dockerfile to temp location
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandbox-'));
@@ -81,21 +84,98 @@ export class SandboxService {
     try {
       this.logger.log(`Building image ${imageTag} for role '${slug}'...`);
 
-      const buildOutput = execSync(
-        `podman build -t ${imageTag} -f ${dockerfilePath} ${tmpDir}`,
-        { encoding: 'utf-8', timeout: 300_000, maxBuffer: 10 * 1024 * 1024 },
-      );
-      logOutput = buildOutput;
-      status = 'success';
+      await new Promise<void>((resolve, reject) => {
+        const buildIdStr = String(nextId);
+
+        // Emit initial build progress
+        this.eventsGateway.broadcastBuildProgress(
+          slug,
+          buildIdStr,
+          `Starting build for ${imageTag}...\n`,
+          'building',
+        );
+
+        const child = spawn('podman', [
+          'build',
+          '-t',
+          imageTag,
+          '-f',
+          dockerfilePath,
+          tmpDir,
+        ]);
+
+        let stderr = '';
+
+        child.stdout?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          logOutput += chunk;
+
+          // Stream each chunk via WebSocket
+          this.eventsGateway.broadcastBuildProgress(
+            slug,
+            buildIdStr,
+            chunk,
+            'building',
+          );
+        });
+
+        child.stderr?.on('data', (data: Buffer) => {
+          const chunk = data.toString();
+          stderr += chunk;
+          logOutput += chunk;
+
+          // Stream each chunk via WebSocket
+          this.eventsGateway.broadcastBuildProgress(
+            slug,
+            buildIdStr,
+            chunk,
+            'building',
+          );
+        });
+
+        child.on('close', (code) => {
+          if (code === 0) {
+            status = 'success';
+            this.eventsGateway.broadcastBuildProgress(
+              slug,
+              buildIdStr,
+              `Build completed successfully for ${imageTag}\n`,
+              'success',
+            );
+            resolve();
+          } else {
+            status = 'failed';
+            errorMessage = stderr || `Build exited with code ${code}`;
+            this.eventsGateway.broadcastBuildProgress(
+              slug,
+              buildIdStr,
+              errorMessage,
+              'failed',
+            );
+            reject(new Error(errorMessage));
+          }
+        });
+
+        child.on('error', (err) => {
+          status = 'failed';
+          errorMessage = err.message;
+          this.eventsGateway.broadcastBuildProgress(
+            slug,
+            buildIdStr,
+            errorMessage,
+            'failed',
+          );
+          reject(err);
+        });
+      });
+
       this.logger.log(`Build succeeded for role '${slug}'`);
     } catch (buildError: unknown) {
-      const err = buildError as Error & { stdout?: string; stderr?: string };
-      logOutput = err.stdout || '';
-      errorMessage = err.stderr || err.message || 'Unknown build error';
-      status = 'failed';
-      this.logger.error(
-        `Build failed for role '${slug}': ${errorMessage}`,
-      );
+      const err = buildError as Error;
+      if (!errorMessage) {
+        errorMessage = err.message || 'Unknown build error';
+      }
+      this.logger.error(`Build failed for role '${slug}': ${errorMessage}`);
     } finally {
       // Clean up temp directory
       try {
