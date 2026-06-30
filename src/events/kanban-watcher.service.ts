@@ -1,16 +1,40 @@
 import { Injectable, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { spawn, ChildProcess } from 'child_process';
 import { EventsGateway } from './events.gateway';
+import { existsSync } from 'fs';
 
 @Injectable()
 export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(KanbanWatcherService.name);
   private childProcess: ChildProcess | null = null;
   private shouldRestart = true;
+  private hermesAvailable = false;
 
   constructor(private eventsGateway: EventsGateway) {}
 
   onModuleInit() {
+    // Check if hermes binary exists before trying to spawn
+    const hermesPaths = ['/usr/local/bin/hermes', '/usr/bin/hermes'];
+    this.hermesAvailable = hermesPaths.some((p) => existsSync(p));
+
+    if (!this.hermesAvailable) {
+      // Also check PATH
+      try {
+        const { execSync } = require('child_process');
+        execSync('which hermes', { stdio: 'pipe' });
+        this.hermesAvailable = true;
+      } catch {
+        // not found
+      }
+    }
+
+    if (!this.hermesAvailable) {
+      this.logger.warn(
+        '[kanban-watch] hermes binary not found — watcher disabled. Board API will return empty results.',
+      );
+      return;
+    }
+
     this.startWatching();
   }
 
@@ -20,11 +44,20 @@ export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
   }
 
   startWatching() {
-    if (!this.shouldRestart) return;
+    if (!this.shouldRestart || !this.hermesAvailable) return;
 
     try {
       this.childProcess = spawn('hermes', ['kanban', 'watch'], {
         stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      // Handle spawn errors (e.g., ENOENT if hermes disappears)
+      this.childProcess.on('error', (err) => {
+        this.logger.error(`[kanban-watch] spawn error: ${err.message}`);
+        this.childProcess = null;
+        if (this.shouldRestart) {
+          setTimeout(() => this.startWatching(), 10_000);
+        }
       });
 
       this.childProcess.stdout?.on('data', (data: Buffer) => {
@@ -42,6 +75,7 @@ export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `[kanban-watch] exited with code ${code}, restarting in 5s...`,
         );
+        this.childProcess = null;
         if (this.shouldRestart) {
           setTimeout(() => this.startWatching(), 5000);
         }
@@ -53,7 +87,7 @@ export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
         `[kanban-watch] Failed to start, retrying in 10s... ${err}`,
       );
       if (this.shouldRestart) {
-        setTimeout(() => this.startWatching(), 10000);
+        setTimeout(() => this.startWatching(), 10_000);
       }
     }
   }
@@ -65,20 +99,19 @@ export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  getWatcherStatus(): { running: boolean } {
+  getWatcherStatus(): { running: boolean; hermesAvailable: boolean } {
     return {
       running:
         this.childProcess !== null && this.childProcess.exitCode === null,
+      hermesAvailable: this.hermesAvailable,
     };
   }
 
   private parseAndBroadcast(line: string) {
     try {
-      // Hermes kanban watch outputs JSON lines
       const event = JSON.parse(line);
       this.eventsGateway.broadcastKanbanEvent(event.type || 'unknown', event);
 
-      // If task status change, also broadcast task-specific update
       if (event.task_id && event.status) {
         this.eventsGateway.broadcastTaskUpdate(
           event.task_id,
@@ -87,7 +120,6 @@ export class KanbanWatcherService implements OnModuleInit, OnModuleDestroy {
         );
       }
     } catch {
-      // Non-JSON line, broadcast as raw message
       this.eventsGateway.broadcastKanbanEvent('raw', { message: line });
     }
   }

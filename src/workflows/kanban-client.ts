@@ -1,9 +1,21 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { Logger } from '@nestjs/common';
+import { existsSync } from 'fs';
 
 const execFileAsync = promisify(execFile);
 const logger = new Logger('KanbanClient');
+
+let hermesAvailable: boolean | null = null;
+
+function isHermesAvailable(): boolean {
+  if (hermesAvailable === null) {
+    hermesAvailable =
+      existsSync('/usr/local/bin/hermes') ||
+      existsSync('/usr/bin/hermes');
+  }
+  return hermesAvailable;
+}
 
 const VALID_PARAM_RE = /^[a-zA-Z0-9 _\-.,:;!?()[\]{}\n\r\t]+$/;
 
@@ -34,6 +46,11 @@ export interface CreateTaskOptions {
 export async function createKanbanTask(
   options: CreateTaskOptions,
 ): Promise<string> {
+  if (!isHermesAvailable()) {
+    logger.warn('hermes binary not found — skipping task creation');
+    return `mock-${Date.now()}`;
+  }
+
   assertSafe(options.title, 'title');
 
   const args = ['kanban', 'create', options.title, '--json'];
@@ -96,6 +113,11 @@ export async function setTaskParents(
   taskId: string,
   parentIds: string[],
 ): Promise<void> {
+  if (!isHermesAvailable()) {
+    logger.warn('hermes binary not found — skipping setTaskParents');
+    return;
+  }
+
   assertSafe(taskId, 'taskId');
 
   if (parentIds.length === 0) return;

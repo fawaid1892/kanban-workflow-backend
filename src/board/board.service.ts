@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { existsSync } from 'fs';
 
 const execFileAsync = promisify(execFile);
 
@@ -61,6 +62,9 @@ export interface BoardStats {
 export class BoardService {
   private readonly logger = new Logger(BoardService.name);
 
+  private hermesAvailable =
+    existsSync('/usr/local/bin/hermes') || existsSync('/usr/bin/hermes');
+
   // TTL cache
   private cache = new Map<string, { data: unknown; expiresAt: number }>();
   private readonly cacheTtlMs = 3000;
@@ -86,6 +90,8 @@ export class BoardService {
     limit?: number;
     offset?: number;
   }): Promise<BoardTask[]> {
+    if (!this.hermesAvailable) return [];
+
     const cacheKey = `tasks:${JSON.stringify(filters ?? {})}`;
     const cached = this.getCached<BoardTask[]>(cacheKey);
     if (cached) return cached;
