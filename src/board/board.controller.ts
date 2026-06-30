@@ -1,24 +1,20 @@
-import {
-  Controller,
-  Get,
-  Param,
-  Query,
-} from '@nestjs/common';
+import { Controller, Get, Param, Query, ParseIntPipe } from '@nestjs/common';
 import { BoardService } from './board.service';
 
-@Controller('board')
+@Controller('workflows/:workflowId/board')
 export class BoardController {
   constructor(private readonly boardService: BoardService) {}
 
   @Get('tasks')
   getTasks(
+    @Param('workflowId', ParseIntPipe) workflowId: number,
     @Query('status') status?: string,
     @Query('assignee') assignee?: string,
     @Query('search') search?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
-    return this.boardService.getTasks({
+    return this.boardService.getTasks(workflowId, {
       status,
       assignee,
       search,
@@ -27,13 +23,16 @@ export class BoardController {
     });
   }
 
-  @Get('tasks/:id')
-  getTaskDetail(@Param('id') id: string) {
-    return this.boardService.getTaskDetail(id);
+  @Get('tasks/:taskId')
+  getTaskDetail(
+    @Param('workflowId', ParseIntPipe) workflowId: number,
+    @Param('taskId') taskId: string,
+  ) {
+    return this.boardService.getTaskDetail(workflowId, taskId);
   }
 
   @Get('stats')
-  getStats() {
-    return this.boardService.getStats();
+  getStats(@Param('workflowId', ParseIntPipe) workflowId: number) {
+    return this.boardService.getStats(workflowId);
   }
 }

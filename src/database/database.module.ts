@@ -6,41 +6,6 @@ import * as schema from './schema';
 export const DRIZZLE = 'DRIZZLE';
 
 const MIGRATION_SQL = `
-CREATE TABLE IF NOT EXISTS "roles" (
-  "id" bigint PRIMARY KEY NOT NULL,
-  "slug" text NOT NULL,
-  "name" text NOT NULL,
-  "description" text NOT NULL,
-  "color" text DEFAULT '#6366f1' NOT NULL,
-  "sort_order" integer DEFAULT 0 NOT NULL,
-  "sandbox_image" text DEFAULT 'node:20-alpine' NOT NULL,
-  "sandbox_network" text DEFAULT 'none' NOT NULL,
-  "sandbox_memory" text DEFAULT '512m' NOT NULL,
-  "sandbox_cpu" text DEFAULT '0.5' NOT NULL,
-  "sandbox_timeout" integer DEFAULT 7200 NOT NULL,
-  "pre_cache_deps" boolean DEFAULT true NOT NULL,
-  "model_mode" text DEFAULT 'shared' NOT NULL,
-  "model_provider" text,
-  "model_name" text,
-  "model_temperature" real DEFAULT 0.7,
-  "model_max_tokens" integer DEFAULT 4096,
-  "model_system_prompt" text,
-  "model_max_turns" integer DEFAULT 20,
-  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
-  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
-  CONSTRAINT "roles_slug_unique" UNIQUE("slug")
-);
-
-CREATE TABLE IF NOT EXISTS "sandbox_builds" (
-  "id" bigint PRIMARY KEY NOT NULL,
-  "role_slug" text NOT NULL,
-  "image_tag" text NOT NULL,
-  "status" text DEFAULT 'building' NOT NULL,
-  "log_output" text,
-  "error_message" text,
-  "built_at" timestamp with time zone DEFAULT now() NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS "workflows" (
   "id" bigint PRIMARY KEY NOT NULL,
   "name" text NOT NULL,
@@ -53,9 +18,9 @@ CREATE TABLE IF NOT EXISTS "workflow_stages" (
   "id" bigint PRIMARY KEY NOT NULL,
   "workflow_id" bigint NOT NULL,
   "title_template" text NOT NULL,
-  "assignee_slug" text,
+  "role_slug" text NOT NULL,
+  "role_label" text NOT NULL,
   "initial_status" text DEFAULT 'todo' NOT NULL,
-  "workspace_kind" text DEFAULT 'scratch' NOT NULL,
   "max_runtime" integer,
   "max_retries" integer DEFAULT 2,
   "skills" text[],
@@ -81,11 +46,16 @@ CREATE TABLE IF NOT EXISTS "workflow_runs" (
   "completed_at" timestamp with time zone
 );
 
-DO $$ BEGIN
-  ALTER TABLE "sandbox_builds" ADD CONSTRAINT "sandbox_builds_role_slug_roles_slug_fk"
-    FOREIGN KEY ("role_slug") REFERENCES "roles"("slug") ON DELETE cascade;
-EXCEPTION WHEN duplicate_object THEN NULL;
-END $$;
+CREATE TABLE IF NOT EXISTS "workflow_settings" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint NOT NULL,
+  "base_url" text NOT NULL,
+  "api_key_encrypted" text NOT NULL,
+  "chat_schema" text DEFAULT 'chat-completions' NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL,
+  "updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+  CONSTRAINT "workflow_settings_workflow_id_unique" UNIQUE("workflow_id")
+);
 
 DO $$ BEGIN
   ALTER TABLE "workflow_stages" ADD CONSTRAINT "workflow_stages_workflow_id_workflows_id_fk"
@@ -107,20 +77,26 @@ END $$;
 
 DO $$ BEGIN
   ALTER TABLE "workflow_runs" ADD CONSTRAINT "workflow_runs_workflow_id_workflows_id_fk"
-    FOREIGN KEY ("workflow_id") REFERENCES "workflows"("id") ON DELETE no action;
+    FOREIGN KEY ("workflow_id") REFERENCES "workflows"("id") ON DELETE cascade;
 EXCEPTION WHEN duplicate_object THEN NULL;
 END $$;
-`;
 
-const SEED_SQL = `
-INSERT INTO "roles" ("id", "slug", "name", "description", "color", "sort_order")
-VALUES
-  (1, 'backend', 'Backend Developer', 'Handles server-side logic, APIs, and database operations', '#3b82f6', 0),
-  (2, 'frontend', 'Frontend Developer', 'Builds user interfaces and client-side interactions', '#8b5cf6', 1),
-  (3, 'qa', 'QA Engineer', 'Tests features and ensures quality standards', '#10b981', 2),
-  (4, 'cybersecurity', 'Cybersecurity', 'Reviews security, performs audits, and hardens systems', '#ef4444', 3),
-  (5, 'devops', 'DevOps', 'Manages deployment, CI/CD, and infrastructure', '#f59e0b', 4)
-ON CONFLICT ("slug") DO NOTHING;
+DO $$ BEGIN
+  ALTER TABLE "workflow_settings" ADD CONSTRAINT "workflow_settings_workflow_id_workflows_id_fk"
+    FOREIGN KEY ("workflow_id") REFERENCES "workflows"("id") ON DELETE cascade;
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $$;
+
+-- Migrate existing data if tables existed before
+DO $$ BEGIN
+  -- Add role_slug and role_label columns if missing (from old schema)
+  ALTER TABLE "workflow_stages" ADD COLUMN IF NOT EXISTS "role_slug" text DEFAULT 'backend';
+  ALTER TABLE "workflow_stages" ADD COLUMN IF NOT EXISTS "role_label" text DEFAULT 'Backend';
+  -- Remove old assignee_slug column if exists
+  ALTER TABLE "workflow_stages" DROP COLUMN IF EXISTS "assignee_slug";
+  ALTER TABLE "workflow_stages" DROP COLUMN IF EXISTS "workspace_kind";
+EXCEPTION WHEN others THEN NULL;
+END $$;
 `;
 
 @Module({
@@ -156,10 +132,6 @@ export class DatabaseModule implements OnModuleInit {
       this.logger.log('Running migrations...');
       await pool.query(MIGRATION_SQL);
       this.logger.log('✅ Tables created / verified');
-
-      this.logger.log('Seeding default roles...');
-      await pool.query(SEED_SQL);
-      this.logger.log('✅ Roles seeded');
     } catch (error) {
       this.logger.error(
         `Migration failed: ${error instanceof Error ? error.message : error}`,

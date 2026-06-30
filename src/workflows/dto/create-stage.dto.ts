@@ -1,47 +1,38 @@
-import {
-  IsString,
-  IsOptional,
-  IsNumber,
-  IsBoolean,
-  IsArray,
-  MinLength,
-} from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsArray } from 'class-validator';
 
 export class CreateStageDto {
-  @IsString()
-  @MinLength(1)
-  titleTemplate: string;
+  @IsNumber()
+  sortOrder!: number;
 
   @IsString()
-  @IsOptional()
-  assigneeSlug?: string;
+  @IsNotEmpty()
+  titleTemplate!: string;
 
   @IsString()
+  @IsNotEmpty()
+  roleSlug!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  roleLabel!: string;
+
   @IsOptional()
+  @IsString()
   initialStatus?: string;
 
-  @IsString()
   @IsOptional()
-  workspaceKind?: string;
-
   @IsNumber()
-  @IsOptional()
   maxRuntime?: number;
 
-  @IsNumber()
   @IsOptional()
+  @IsNumber()
   maxRetries?: number;
 
-  @IsArray()
-  @IsString({ each: true })
   @IsOptional()
+  @IsArray()
   skills?: string[];
 
+  @IsOptional()
   @IsBoolean()
-  @IsOptional()
   goalMode?: boolean;
-
-  @IsNumber()
-  @IsOptional()
-  sortOrder?: number;
 }

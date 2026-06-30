@@ -28,26 +28,9 @@ export interface BoardTask {
   currentStepKey: string | null;
 }
 
-export interface TaskEvent {
-  id: number;
-  taskId: string;
-  runId: string | null;
-  kind: string;
-  payload: string | null;
-  createdAt: number;
-}
-
-export interface TaskComment {
-  id: number;
-  taskId: string;
-  author: string;
-  body: string;
-  createdAt: number;
-}
-
 export interface TaskDetail extends BoardTask {
-  events: TaskEvent[];
-  comments: TaskComment[];
+  events: { id: number; taskId: string; runId: string | null; kind: string; payload: string | null; createdAt: number }[];
+  comments: { id: number; taskId: string; author: string; body: string; createdAt: number }[];
   parentIds: string[];
   childIds: string[];
 }
@@ -80,10 +63,11 @@ export class BoardService {
     this.cache.set(key, { data, expiresAt: Date.now() + this.cacheTtlMs });
   }
 
-  /**
-   * List tasks via `hermes kanban list --json`.
-   */
-  async getTasks(filters?: {
+  private boardSlug(workflowId: number): string {
+    return `wf-${workflowId}`;
+  }
+
+  async getTasks(workflowId: number, filters?: {
     status?: string;
     assignee?: string;
     search?: string;
@@ -92,14 +76,13 @@ export class BoardService {
   }): Promise<BoardTask[]> {
     if (!this.hermesAvailable) return [];
 
-    const cacheKey = `tasks:${JSON.stringify(filters ?? {})}`;
+    const cacheKey = `tasks:${workflowId}:${JSON.stringify(filters ?? {})}`;
     const cached = this.getCached<BoardTask[]>(cacheKey);
     if (cached) return cached;
 
     try {
-      const args = ['kanban', 'list', '--json'];
+      const args = ['kanban', 'list', '--board', this.boardSlug(workflowId), '--json'];
       if (filters?.status) args.push('--status', filters.status);
-      if (filters?.assignee) args.push('--assignee', filters.assignee);
 
       const { stdout } = await execFileAsync('hermes', args, {
         timeout: 15_000,
@@ -108,17 +91,16 @@ export class BoardService {
 
       let tasks: BoardTask[] = JSON.parse(stdout.trim()).map(this.mapTask);
 
-      // Client-side search filter
+      if (filters?.assignee) {
+        tasks = tasks.filter((t) => t.assignee === filters.assignee);
+      }
       if (filters?.search) {
         const q = filters.search.toLowerCase();
         tasks = tasks.filter(
-          (t) =>
-            t.title.toLowerCase().includes(q) ||
-            (t.body && t.body.toLowerCase().includes(q)),
+          (t) => t.title.toLowerCase().includes(q) || (t.body && t.body.toLowerCase().includes(q)),
         );
       }
 
-      // Pagination
       const offset = filters?.offset ?? 0;
       const limit = filters?.limit ?? 200;
       tasks = tasks.slice(offset, offset + limit);
@@ -127,19 +109,16 @@ export class BoardService {
       return tasks;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      this.logger.error(`Failed to list kanban tasks: ${message}`);
+      this.logger.error(`Failed to list board tasks: ${message}`);
       return [];
     }
   }
 
-  /**
-   * Get task detail via `hermes kanban get <id> --json`.
-   */
-  async getTaskDetail(taskId: string): Promise<TaskDetail | null> {
+  async getTaskDetail(workflowId: number, taskId: string): Promise<TaskDetail | null> {
     try {
       const { stdout } = await execFileAsync(
         'hermes',
-        ['kanban', 'get', taskId, '--json'],
+        ['kanban', 'get', taskId, '--board', this.boardSlug(workflowId), '--json'],
         { timeout: 10_000, env: { ...process.env } },
       );
 
@@ -171,14 +150,11 @@ export class BoardService {
     }
   }
 
-  /**
-   * Board stats derived from full task list.
-   */
-  async getStats(): Promise<BoardStats> {
-    const cached = this.getCached<BoardStats>('stats');
+  async getStats(workflowId: number): Promise<BoardStats> {
+    const cached = this.getCached<BoardStats>(`stats:${workflowId}`);
     if (cached) return cached;
 
-    const tasks = await this.getTasks({ limit: 1000 });
+    const tasks = await this.getTasks(workflowId, { limit: 1000 });
 
     const byStatus: Record<string, number> = {};
     const byAssignee: Record<string, number> = {};
@@ -189,7 +165,7 @@ export class BoardService {
     }
 
     const result: BoardStats = { total: tasks.length, byStatus, byAssignee };
-    this.setCache('stats', result);
+    this.setCache(`stats:${workflowId}`, result);
     return result;
   }
 

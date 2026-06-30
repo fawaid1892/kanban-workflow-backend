@@ -1,12 +1,11 @@
 import { Module } from '@nestjs/common';
-import { WorkflowsController } from './workflows.controller';
 import { WorkflowsService } from './workflows.service';
-import { DatabaseModule } from '../database/database.module';
+import { WorkflowsController } from './workflows.controller';
+import { WorkflowSettingsService } from './workflow-settings.service';
 
 @Module({
-  imports: [DatabaseModule],
   controllers: [WorkflowsController],
-  providers: [WorkflowsService],
+  providers: [WorkflowsService, WorkflowSettingsService],
   exports: [WorkflowsService],
 })
 export class WorkflowsModule {}

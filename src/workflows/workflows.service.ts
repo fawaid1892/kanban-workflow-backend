@@ -15,8 +15,8 @@ import { CreateStageDto } from './dto/create-stage.dto';
 import { UpdateStageDto } from './dto/update-stage.dto';
 import { SetDependenciesDto } from './dto/set-dependencies.dto';
 import { RunWorkflowDto } from './dto/run-workflow.dto';
-import { parseTemplate, extractParams } from './template-parser';
-import { createKanbanTask, setTaskParents } from './kanban-client';
+import { parseTemplate } from './template-parser';
+import { createKanbanTask, setTaskParents, createBoard, createProfile } from './kanban-client';
 
 @Injectable()
 export class WorkflowsService {
@@ -25,6 +25,10 @@ export class WorkflowsService {
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
   ) {}
+
+  private boardSlug(workflowId: number): string {
+    return `wf-${workflowId}`;
+  }
 
   // ── Workflow CRUD ──
 
@@ -67,6 +71,9 @@ export class WorkflowsService {
       })
       .returning();
 
+    // Create Hermes board for this workflow
+    await createBoard(this.boardSlug(nextId), dto.name);
+
     return { ...workflow, stages: [] };
   }
 
@@ -89,10 +96,7 @@ export class WorkflowsService {
 
   async remove(id: number) {
     await this.findWorkflowOrThrow(id);
-
-    // Cascade delete is handled by DB (FK onDelete: cascade)
     await this.db.delete(schema.workflows).where(eq(schema.workflows.id, id));
-
     return { deleted: true, id };
   }
 
@@ -103,15 +107,18 @@ export class WorkflowsService {
 
     const nextId = await this.resolveNextStageId();
 
+    // Create Hermes profile for this role
+    await createProfile(dto.roleSlug);
+
     const [stage] = await this.db
       .insert(schema.workflowStages)
       .values({
         id: nextId,
         workflowId,
         titleTemplate: dto.titleTemplate,
-        assigneeSlug: dto.assigneeSlug ?? null,
+        roleSlug: dto.roleSlug,
+        roleLabel: dto.roleLabel,
         initialStatus: dto.initialStatus ?? 'todo',
-        workspaceKind: dto.workspaceKind ?? 'scratch',
         maxRuntime: dto.maxRuntime ?? null,
         maxRetries: dto.maxRetries ?? 2,
         skills: dto.skills ?? null,
@@ -139,15 +146,8 @@ export class WorkflowsService {
 
     const updateData: Record<string, unknown> = {};
     const fields: (keyof UpdateStageDto)[] = [
-      'titleTemplate',
-      'assigneeSlug',
-      'initialStatus',
-      'workspaceKind',
-      'maxRuntime',
-      'maxRetries',
-      'skills',
-      'goalMode',
-      'sortOrder',
+      'titleTemplate', 'roleSlug', 'roleLabel', 'initialStatus',
+      'maxRuntime', 'maxRetries', 'skills', 'goalMode', 'sortOrder',
     ];
 
     for (const field of fields) {
@@ -176,7 +176,6 @@ export class WorkflowsService {
     await this.findWorkflowOrThrow(workflowId);
     await this.findStageOrThrow(stageId);
 
-    // Cascade delete handles dependencies
     await this.db
       .delete(schema.workflowStages)
       .where(eq(schema.workflowStages.id, stageId));
@@ -196,7 +195,6 @@ export class WorkflowsService {
 
     const { parentIds } = dto;
 
-    // Validate all parent stages exist and belong to same workflow
     if (parentIds.length > 0) {
       const parentStages = await this.db
         .select()
@@ -204,9 +202,7 @@ export class WorkflowsService {
         .where(inArray(schema.workflowStages.id, parentIds));
 
       if (parentStages.length !== parentIds.length) {
-        throw new NotFoundException(
-          'One or more parent stages not found',
-        );
+        throw new NotFoundException('One or more parent stages not found');
       }
 
       for (const ps of parentStages) {
@@ -217,7 +213,6 @@ export class WorkflowsService {
         }
       }
 
-      // Cycle detection
       const allDeps = await this.db
         .select()
         .from(schema.stageDependencies);
@@ -229,27 +224,17 @@ export class WorkflowsService {
       }
     }
 
-    // Replace all existing dependencies
     await this.db
       .delete(schema.stageDependencies)
       .where(eq(schema.stageDependencies.stageId, stageId));
 
-    if (parentIds.length > 0) {
-      const values = parentIds.map((parentId) => ({
-        id: 0, // placeholder — we'll use a sub-query or resolve IDs
+    for (const parentId of parentIds) {
+      const nextDepId = await this.resolveNextDepId();
+      await this.db.insert(schema.stageDependencies).values({
+        id: nextDepId,
         stageId,
         parentId,
-      }));
-
-      // Insert one by one, resolving next ID for each
-      for (const parentId of parentIds) {
-        const nextDepId = await this.resolveNextDepId();
-        await this.db.insert(schema.stageDependencies).values({
-          id: nextDepId,
-          stageId,
-          parentId,
-        });
-      }
+      });
     }
 
     return { stageId, parentIds };
@@ -274,37 +259,23 @@ export class WorkflowsService {
       .select()
       .from(schema.stageDependencies);
 
-    // Build parents and children arrays for each stage
     const stageGraph = stages.map((stage) => {
       const parents = deps
         .filter((d) => d.stageId === stage.id)
         .map((d) => d.parentId);
-
       const children = deps
         .filter((d) => d.parentId === stage.id)
         .map((d) => d.stageId);
-
-      return {
-        ...stage,
-        parents,
-        children,
-      };
+      return { ...stage, parents, children };
     });
 
-    return {
-      workflow,
-      stages: stageGraph,
-    };
+    return { workflow, stages: stageGraph };
   }
 
-  // ── Workflow Execution (S6) ──
+  // ── Workflow Execution ──
 
-  /**
-   * Run a workflow: parse templates, create kanban tasks, wire dependencies.
-   * Executes asynchronously — returns runId immediately.
-   */
   async runWorkflow(workflowId: number, dto: RunWorkflowDto) {
-    const workflow = await this.findWorkflowOrThrow(workflowId);
+    await this.findWorkflowOrThrow(workflowId);
 
     const stages = await this.db
       .select()
@@ -320,16 +291,13 @@ export class WorkflowsService {
       .select()
       .from(schema.stageDependencies);
 
-    // Filter to this workflow's stages
     const stageIds = new Set(stages.map((s) => s.id));
     const deps = allDeps.filter(
       (d) => stageIds.has(d.stageId) && stageIds.has(d.parentId),
     );
 
-    // Topological sort
     const sorted = this.topologicalSort(stages, deps, dto.skipStages ?? []);
 
-    // Create run record
     const runId = await this.resolveNextRunId();
     await this.db.insert(schema.workflowRuns).values({
       id: runId,
@@ -339,8 +307,7 @@ export class WorkflowsService {
       status: 'running',
     });
 
-    // Execute asynchronously
-    this.executeWorkflowRun(runId, sorted, deps, dto).catch((err) => {
+    this.executeWorkflowRun(workflowId, runId, sorted, deps, dto).catch((err) => {
       this.logger.error(`Workflow run ${runId} failed: ${err.message}`);
       this.db
         .update(schema.workflowRuns)
@@ -352,21 +319,22 @@ export class WorkflowsService {
   }
 
   private async executeWorkflowRun(
+    workflowId: number,
     runId: number,
     sorted: typeof schema.workflowStages.$inferSelect[],
     deps: { stageId: number; parentId: number }[],
     dto: RunWorkflowDto,
   ) {
-    const taskIds = new Map<number, string>(); // stageId → kanban taskId
+    const board = this.boardSlug(workflowId);
+    const taskIds = new Map<number, string>();
 
     for (const stage of sorted) {
       const parsedTitle = parseTemplate(stage.titleTemplate, dto.params);
-      const assignee =
-        dto.assigneeOverrides?.[stage.id] ?? stage.assigneeSlug ?? 'backend';
 
       const taskId = await createKanbanTask({
         title: parsedTitle,
-        assignee,
+        board,
+        assignee: stage.roleSlug,
         status: stage.initialStatus,
         skills: stage.skills ?? undefined,
         maxRuntime: stage.maxRuntime ?? undefined,
@@ -377,7 +345,6 @@ export class WorkflowsService {
       taskIds.set(stage.id, taskId);
     }
 
-    // Wire parent dependencies
     for (const stage of sorted) {
       const stageDeps = deps.filter((d) => d.stageId === stage.id);
       if (stageDeps.length > 0) {
@@ -386,31 +353,20 @@ export class WorkflowsService {
           .filter(Boolean) as string[];
         const taskId = taskIds.get(stage.id);
         if (taskId && parentIdStrs.length > 0) {
-          await setTaskParents(taskId, parentIdStrs);
+          await setTaskParents(taskId, parentIdStrs, board);
         }
       }
     }
 
-    // Update run record with completion
     const allTaskIds = Array.from(taskIds.values());
     await this.db
       .update(schema.workflowRuns)
-      .set({
-        taskIds: allTaskIds,
-        status: 'completed',
-        completedAt: new Date(),
-      })
+      .set({ taskIds: allTaskIds, status: 'completed', completedAt: new Date() })
       .where(eq(schema.workflowRuns.id, runId));
 
-    this.logger.log(
-      `Workflow run ${runId} completed: ${allTaskIds.length} tasks created`,
-    );
+    this.logger.log(`Workflow run ${runId} completed: ${allTaskIds.length} tasks created`);
   }
 
-  /**
-   * Topological sort using Kahn's algorithm.
-   * Skips stages whose IDs are in skipIds.
-   */
   private topologicalSort(
     stages: typeof schema.workflowStages.$inferSelect[],
     deps: { stageId: number; parentId: number }[],
@@ -420,7 +376,6 @@ export class WorkflowsService {
     const filtered = stages.filter((s) => !skipSet.has(s.id));
     const filteredIds = new Set(filtered.map((s) => s.id));
 
-    // Build adjacency: parent → children (only among filtered stages)
     const inDegree = new Map<number, number>();
     const adj = new Map<number, number[]>();
 
@@ -436,7 +391,6 @@ export class WorkflowsService {
       }
     }
 
-    // Kahn's algorithm
     const queue: number[] = [];
     for (const [id, deg] of inDegree) {
       if (deg === 0) queue.push(id);
@@ -456,19 +410,16 @@ export class WorkflowsService {
     }
 
     if (sorted.length !== filtered.length) {
-      throw new BadRequestException(
-        'Circular dependency detected in workflow stages',
-      );
+      throw new BadRequestException('Circular dependency detected in workflow stages');
     }
 
     return sorted;
   }
 
-  // ── Run History (S6-05) ──
+  // ── Run History ──
 
   async getRuns(workflowId: number) {
     await this.findWorkflowOrThrow(workflowId);
-
     return this.db
       .select()
       .from(schema.workflowRuns)
@@ -478,83 +429,13 @@ export class WorkflowsService {
 
   async getRun(workflowId: number, runId: number) {
     await this.findWorkflowOrThrow(workflowId);
-
     const [run] = await this.db
       .select()
       .from(schema.workflowRuns)
       .where(eq(schema.workflowRuns.id, runId))
       .limit(1);
-
-    if (!run) {
-      throw new NotFoundException(`Run with ID '${runId}' not found`);
-    }
-
+    if (!run) throw new NotFoundException(`Run with ID '${runId}' not found`);
     return run;
-  }
-
-  // ── Cycle Detection (S5-04) ──
-
-  /**
-   * Validates that adding parentIds as parents of stageId does not create
-   * a circular dependency.
-   *
-   * Uses DFS from stageId following existing edges (parent -> child).
-   * If we can reach any of the proposed parentIds from stageId,
-   * adding the reverse edge (parent -> stageId) would create a cycle.
-   */
-  validateDependencies(
-    stageId: number,
-    parentIds: number[],
-    allStages: { id: number }[],
-  ): boolean {
-    return !this.hasCycle(
-      stageId,
-      parentIds,
-      // Convert allStages to deps format (just pass empty deps as we only
-      // have stage IDs, not deps — this overload is for external use)
-      [],
-    );
-  }
-
-  private hasCycle(
-    stageId: number,
-    parentIds: number[],
-    allDeps: { stageId: number; parentId: number }[],
-  ): boolean {
-    // Build adjacency: parent -> children
-    // Exclude current stage's existing deps since we're replacing them
-    const adj = new Map<number, number[]>();
-
-    for (const dep of allDeps) {
-      if (dep.stageId === stageId) continue; // skip current deps being replaced
-      if (!adj.has(dep.parentId)) {
-        adj.set(dep.parentId, []);
-      }
-      adj.get(dep.parentId)!.push(dep.stageId);
-    }
-
-    // DFS from start node, trying to reach target
-    const dfs = (current: number, target: number, visited: Set<number>): boolean => {
-      if (current === target) return true;
-      if (visited.has(current)) return false;
-      visited.add(current);
-      for (const child of adj.get(current) || []) {
-        if (dfs(child, target, visited)) return true;
-      }
-      return false;
-    };
-
-    // For each proposed parent, check if there's a path from stageId to parent
-    // i.e., stageId -> ... -> parentId. If so, adding parentId -> stageId
-    // creates a cycle: stageId -> ... -> parentId -> stageId
-    for (const parentId of parentIds) {
-      const visited = new Set<number>();
-      if (dfs(stageId, parentId, visited)) {
-        return true; // cycle detected
-      }
-    }
-
-    return false;
   }
 
   // ── Helpers ──
@@ -565,11 +446,7 @@ export class WorkflowsService {
       .from(schema.workflows)
       .where(eq(schema.workflows.id, id))
       .limit(1);
-
-    if (!workflow) {
-      throw new NotFoundException(`Workflow with ID '${id}' not found`);
-    }
-
+    if (!workflow) throw new NotFoundException(`Workflow with ID '${id}' not found`);
     return workflow;
   }
 
@@ -579,67 +456,68 @@ export class WorkflowsService {
       .from(schema.workflowStages)
       .where(eq(schema.workflowStages.id, stageId))
       .limit(1);
-
-    if (!stage) {
-      throw new NotFoundException(`Stage with ID '${stageId}' not found`);
-    }
-
+    if (!stage) throw new NotFoundException(`Stage with ID '${stageId}' not found`);
     return stage;
   }
 
-  private async resolveNextWorkflowId(): Promise<number> {
-    const all = await this.db
-      .select({ id: schema.workflows.id })
-      .from(schema.workflows);
-
-    if (all.length === 0) return 1;
-
-    let maxId = 0;
-    for (const r of all) {
-      if (r.id > maxId) maxId = r.id;
+  private hasCycle(
+    stageId: number,
+    parentIds: number[],
+    allDeps: { stageId: number; parentId: number }[],
+  ): boolean {
+    const adj = new Map<number, number[]>();
+    for (const dep of allDeps) {
+      if (dep.stageId === stageId) continue;
+      if (!adj.has(dep.parentId)) adj.set(dep.parentId, []);
+      adj.get(dep.parentId)!.push(dep.stageId);
     }
+
+    const dfs = (current: number, target: number, visited: Set<number>): boolean => {
+      if (current === target) return true;
+      if (visited.has(current)) return false;
+      visited.add(current);
+      for (const child of adj.get(current) || []) {
+        if (dfs(child, target, visited)) return true;
+      }
+      return false;
+    };
+
+    for (const parentId of parentIds) {
+      const visited = new Set<number>();
+      if (dfs(stageId, parentId, visited)) return true;
+    }
+    return false;
+  }
+
+  private async resolveNextWorkflowId(): Promise<number> {
+    const all = await this.db.select({ id: schema.workflows.id }).from(schema.workflows);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
 
   private async resolveNextStageId(): Promise<number> {
-    const all = await this.db
-      .select({ id: schema.workflowStages.id })
-      .from(schema.workflowStages);
-
+    const all = await this.db.select({ id: schema.workflowStages.id }).from(schema.workflowStages);
     if (all.length === 0) return 1;
-
     let maxId = 0;
-    for (const r of all) {
-      if (r.id > maxId) maxId = r.id;
-    }
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
 
   private async resolveNextDepId(): Promise<number> {
-    const all = await this.db
-      .select({ id: schema.stageDependencies.id })
-      .from(schema.stageDependencies);
-
+    const all = await this.db.select({ id: schema.stageDependencies.id }).from(schema.stageDependencies);
     if (all.length === 0) return 1;
-
     let maxId = 0;
-    for (const r of all) {
-      if (r.id > maxId) maxId = r.id;
-    }
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
 
   private async resolveNextRunId(): Promise<number> {
-    const all = await this.db
-      .select({ id: schema.workflowRuns.id })
-      .from(schema.workflowRuns);
-
+    const all = await this.db.select({ id: schema.workflowRuns.id }).from(schema.workflowRuns);
     if (all.length === 0) return 1;
-
     let maxId = 0;
-    for (const r of all) {
-      if (r.id > maxId) maxId = r.id;
-    }
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
 }

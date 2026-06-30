@@ -1,15 +1,6 @@
 import {
-  Controller,
-  Get,
-  Post,
-  Put,
-  Delete,
-  Body,
-  Param,
-  HttpCode,
-  HttpStatus,
-  ValidationPipe,
-  ParseIntPipe,
+  Controller, Get, Post, Put, Delete, Body, Param, Query, HttpCode, HttpStatus,
+  ValidationPipe, ParseIntPipe,
 } from '@nestjs/common';
 import { WorkflowsService } from './workflows.service';
 import { CreateWorkflowDto } from './dto/create-workflow.dto';
@@ -18,21 +9,25 @@ import { CreateStageDto } from './dto/create-stage.dto';
 import { UpdateStageDto } from './dto/update-stage.dto';
 import { SetDependenciesDto } from './dto/set-dependencies.dto';
 import { RunWorkflowDto } from './dto/run-workflow.dto';
+import { WorkflowSettingsService } from './workflow-settings.service';
 
 @Controller('workflows')
 export class WorkflowsController {
-  constructor(private readonly workflowsService: WorkflowsService) {}
+  constructor(
+    private readonly workflowsService: WorkflowsService,
+    private readonly settingsService: WorkflowSettingsService,
+  ) {}
 
-  // ── S5-01: Workflow CRUD ──
+  // ── Workflow CRUD ──
 
   @Get()
-  async findAll() {
+  findAll() {
     return this.workflowsService.findAll();
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async create(
+  create(
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     dto: CreateWorkflowDto,
   ) {
@@ -40,12 +35,12 @@ export class WorkflowsController {
   }
 
   @Get(':id')
-  async findOne(@Param('id', ParseIntPipe) id: number) {
+  findOne(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.findOne(id);
   }
 
   @Put(':id')
-  async update(
+  update(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     dto: UpdateWorkflowDto,
@@ -55,15 +50,15 @@ export class WorkflowsController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
-  async remove(@Param('id', ParseIntPipe) id: number) {
+  remove(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.remove(id);
   }
 
-  // ── S5-02: Stage CRUD ──
+  // ── Stage CRUD ──
 
   @Post(':id/stages')
   @HttpCode(HttpStatus.CREATED)
-  async addStage(
+  addStage(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     dto: CreateStageDto,
@@ -72,12 +67,12 @@ export class WorkflowsController {
   }
 
   @Get(':id/stages')
-  async getStages(@Param('id', ParseIntPipe) id: number) {
+  getStages(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getStages(id);
   }
 
   @Put(':id/stages/:stageId')
-  async updateStage(
+  updateStage(
     @Param('id', ParseIntPipe) id: number,
     @Param('stageId', ParseIntPipe) stageId: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
@@ -88,17 +83,17 @@ export class WorkflowsController {
 
   @Delete(':id/stages/:stageId')
   @HttpCode(HttpStatus.OK)
-  async removeStage(
+  removeStage(
     @Param('id', ParseIntPipe) id: number,
     @Param('stageId', ParseIntPipe) stageId: number,
   ) {
     return this.workflowsService.removeStage(id, stageId);
   }
 
-  // ── S5-03: Dependency Management ──
+  // ── Dependencies ──
 
   @Put(':id/stages/:stageId/deps')
-  async setDependencies(
+  setDependencies(
     @Param('id', ParseIntPipe) id: number,
     @Param('stageId', ParseIntPipe) stageId: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
@@ -108,15 +103,15 @@ export class WorkflowsController {
   }
 
   @Get(':id/graph')
-  async getGraph(@Param('id', ParseIntPipe) id: number) {
+  getGraph(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getGraph(id);
   }
 
-  // ── S6: Workflow Execution ──
+  // ── Execution ──
 
   @Post(':id/run')
   @HttpCode(HttpStatus.CREATED)
-  async runWorkflow(
+  runWorkflow(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
     dto: RunWorkflowDto,
@@ -124,18 +119,32 @@ export class WorkflowsController {
     return this.workflowsService.runWorkflow(id, dto);
   }
 
-  // ── S6: Run History ──
-
   @Get(':id/runs')
-  async getRuns(@Param('id', ParseIntPipe) id: number) {
+  getRuns(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getRuns(id);
   }
 
   @Get(':id/runs/:runId')
-  async getRun(
+  getRun(
     @Param('id', ParseIntPipe) id: number,
     @Param('runId', ParseIntPipe) runId: number,
   ) {
     return this.workflowsService.getRun(id, runId);
+  }
+
+  // ── Settings ──
+
+  @Get(':id/settings')
+  getSettings(@Param('id', ParseIntPipe) id: number) {
+    return this.settingsService.getSettings(id);
+  }
+
+  @Put(':id/settings')
+  updateSettings(
+    @Param('id', ParseIntPipe) id: number,
+    @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
+    dto: { baseUrl: string; apiKey: string; chatSchema: string },
+  ) {
+    return this.settingsService.updateSettings(id, dto);
   }
 }
