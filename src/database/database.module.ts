@@ -81,7 +81,6 @@ CREATE TABLE IF NOT EXISTS "workflow_runs" (
   "completed_at" timestamp with time zone
 );
 
--- Foreign keys (using DO block for idempotency)
 DO $$ BEGIN
   ALTER TABLE "sandbox_builds" ADD CONSTRAINT "sandbox_builds_role_slug_roles_slug_fk"
     FOREIGN KEY ("role_slug") REFERENCES "roles"("slug") ON DELETE cascade;
@@ -148,7 +147,10 @@ export class DatabaseModule implements OnModuleInit {
       return;
     }
 
-    const pool = new Pool({ connectionString: databaseUrl });
+    const pool = new Pool({
+      connectionString: databaseUrl,
+      connectionTimeoutMillis: 10000,
+    });
 
     try {
       this.logger.log('Running migrations...');
