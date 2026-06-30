@@ -9,4 +9,4 @@ async function bootstrap() {
   await app.listen(port);
   console.log(`Backend running on port ${port}`);
 }
-bootstrap();
+void bootstrap();
