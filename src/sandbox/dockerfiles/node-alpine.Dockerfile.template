@@ -1,0 +1,17 @@
+FROM ${BASE_IMAGE}
+
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    git \
+    curl \
+    bash \
+    ${EXTRA_PACKAGES}
+
+# Install Hermes binary
+COPY ${HERMES_BIN} /usr/local/bin/hermes
+RUN chmod +x /usr/local/bin/hermes
+
+WORKDIR /workspace
+
+CMD ["/bin/bash"]
