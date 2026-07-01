@@ -19,7 +19,7 @@ export class WorkflowsController {
     private readonly settingsService: WorkflowSettingsService,
   ) {}
 
-  // ── Workflow CRUD ──
+  // ── Static routes (MUST be before :id routes) ──
 
   @Get()
   findAll() {
@@ -34,6 +34,39 @@ export class WorkflowsController {
   ) {
     return this.workflowsService.create(dto);
   }
+
+  @Get('templates')
+  getTemplates() {
+    return this.workflowsService.getTemplates();
+  }
+
+  @Get('export-all')
+  exportAll() {
+    return this.workflowsService.exportAll();
+  }
+
+  @Get('dashboard')
+  getDashboard() {
+    return this.workflowsService.getDashboard();
+  }
+
+  @Get('search')
+  search(@Query('q') q: string) {
+    return this.workflowsService.searchWorkflows(q ?? '');
+  }
+
+  @Get('tags')
+  getAllTags() {
+    return this.workflowsService.getAllTags();
+  }
+
+  @Post('import')
+  @HttpCode(HttpStatus.CREATED)
+  importWorkflow(@Body() dto: any) {
+    return this.workflowsService.importWorkflow(dto);
+  }
+
+  // ── Parameterized routes (:id) ──
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number) {
@@ -61,20 +94,9 @@ export class WorkflowsController {
     return this.workflowsService.duplicate(id);
   }
 
-  @Get('templates')
-  getTemplates() {
-    return this.workflowsService.getTemplates();
-  }
-
   @Get(':id/export')
   exportWorkflow(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.exportWorkflow(id);
-  }
-
-  @Post('import')
-  @HttpCode(HttpStatus.CREATED)
-  importWorkflow(@Body() dto: any) {
-    return this.workflowsService.importWorkflow(dto);
   }
 
   @Get(':id/analytics')
@@ -87,7 +109,33 @@ export class WorkflowsController {
     return this.workflowsService.getActivityLogs(id);
   }
 
-  // Versions
+  @Put(':id/notes')
+  updateNotes(@Param('id', ParseIntPipe) id: number, @Body('notes') notes: string) {
+    return this.workflowsService.updateNotes(id, notes);
+  }
+
+  @Put(':id/favorite')
+  toggleFavorite(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.toggleFavorite(id);
+  }
+
+  @Put(':id/archive')
+  toggleArchive(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.toggleArchive(id);
+  }
+
+  @Get(':id/gantt')
+  getGantt(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getGantt(id);
+  }
+
+  @Get(':id/time-logs')
+  getTimeLogs(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getTimeLogs(id);
+  }
+
+  // ── Versions ──
+
   @Post(':id/versions')
   @HttpCode(HttpStatus.CREATED)
   snapshotVersion(@Param('id', ParseIntPipe) id: number, @Body('changeSummary') summary?: string) {
@@ -99,35 +147,18 @@ export class WorkflowsController {
     return this.workflowsService.getVersions(id);
   }
 
-  @Get(':id/versions/:vid')
-  getVersion(@Param('id', ParseIntPipe) id: number, @Param('vid', ParseIntPipe) vid: number) {
-    return this.workflowsService.getVersion(id, vid);
-  }
-
   @Get(':id/versions/compare')
   compareVersions(@Param('id', ParseIntPipe) id: number, @Query('v1') v1: string, @Query('v2') v2: string) {
     return this.workflowsService.compareVersions(id, parseInt(v1), parseInt(v2));
   }
 
-  // Batch Export
-  @Get('export-all')
-  exportAll() {
-    return this.workflowsService.exportAll();
+  @Get(':id/versions/:vid')
+  getVersion(@Param('id', ParseIntPipe) id: number, @Param('vid', ParseIntPipe) vid: number) {
+    return this.workflowsService.getVersion(id, vid);
   }
 
-  // Dashboard
-  @Get('dashboard')
-  getDashboard() {
-    return this.workflowsService.getDashboard();
-  }
+  // ── Sharing ──
 
-  // Notes
-  @Put(':id/notes')
-  updateNotes(@Param('id', ParseIntPipe) id: number, @Body('notes') notes: string) {
-    return this.workflowsService.updateNotes(id, notes);
-  }
-
-  // Sharing
   @Get(':id/shares')
   getShares(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getShares(id);
@@ -144,7 +175,8 @@ export class WorkflowsController {
     return this.workflowsService.removeShare(id, sid);
   }
 
-  // Recurring
+  // ── Recurring ──
+
   @Get(':id/recurring')
   getRecurring(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getRecurring(id);
@@ -161,7 +193,8 @@ export class WorkflowsController {
     return this.workflowsService.deleteRecurring(id, rid);
   }
 
-  // Webhook
+  // ── Webhook ──
+
   @Get(':id/webhook')
   getWebhook(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getWebhook(id);
@@ -172,7 +205,8 @@ export class WorkflowsController {
     return this.workflowsService.upsertWebhook(id, dto);
   }
 
-  // Columns
+  // ── Columns ──
+
   @Get(':id/columns')
   getColumns(@Param('id', ParseIntPipe) id: number) {
     return this.workflowsService.getColumns(id);
@@ -189,17 +223,7 @@ export class WorkflowsController {
     return this.workflowsService.deleteColumn(id, cid);
   }
 
-  // Search
-  @Get('search')
-  search(@Query('q') q: string) {
-    return this.workflowsService.searchWorkflows(q ?? '');
-  }
-
-  // Tags
-  @Get('tags')
-  getAllTags() {
-    return this.workflowsService.getAllTags();
-  }
+  // ── Tags ──
 
   @Get(':id/tags')
   getTags(@Param('id', ParseIntPipe) id: number) {
@@ -217,30 +241,7 @@ export class WorkflowsController {
     return this.workflowsService.removeTag(id, tag);
   }
 
-  // Favorites + Archive
-  @Put(':id/favorite')
-  toggleFavorite(@Param('id', ParseIntPipe) id: number) {
-    return this.workflowsService.toggleFavorite(id);
-  }
-
-  @Put(':id/archive')
-  toggleArchive(@Param('id', ParseIntPipe) id: number) {
-    return this.workflowsService.toggleArchive(id);
-  }
-
-  // Gantt
-  @Get(':id/gantt')
-  getGantt(@Param('id', ParseIntPipe) id: number) {
-    return this.workflowsService.getGantt(id);
-  }
-
-  // Time Tracking
-  @Get(':id/time-logs')
-  getTimeLogs(@Param('id', ParseIntPipe) id: number) {
-    return this.workflowsService.getTimeLogs(id);
-  }
-
-  // ── Stage CRUD ──
+  // ── Stages ──
 
   @Post(':id/stages')
   @HttpCode(HttpStatus.CREATED)
