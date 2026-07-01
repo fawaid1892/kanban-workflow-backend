@@ -52,6 +52,26 @@ export class BoardController {
     return this.boardService.addComment(workflowId, taskId, body, author ?? 'user');
   }
 
+  @Put('tasks/bulk-status')
+  @HttpCode(HttpStatus.OK)
+  bulkUpdateStatus(
+    @Param('workflowId', ParseIntPipe) workflowId: number,
+    @Body('taskIds') taskIds: string[],
+    @Body('status') status: string,
+  ) {
+    return this.boardService.bulkUpdateStatus(workflowId, taskIds, status);
+  }
+
+  @Put('tasks/:taskId/priority')
+  @HttpCode(HttpStatus.OK)
+  updatePriority(
+    @Param('workflowId', ParseIntPipe) workflowId: number,
+    @Param('taskId') taskId: string,
+    @Body('priority') priority: number,
+  ) {
+    return this.boardService.updateTaskPriority(workflowId, taskId, priority);
+  }
+
   @Get('stats')
   getStats(@Param('workflowId', ParseIntPipe) workflowId: number) {
     return this.boardService.getStats(workflowId);

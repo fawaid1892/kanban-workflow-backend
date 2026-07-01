@@ -77,6 +77,16 @@ export class WorkflowsController {
     return this.workflowsService.importWorkflow(dto);
   }
 
+  @Get(':id/analytics')
+  getAnalytics(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getAnalytics(id);
+  }
+
+  @Get(':id/activity')
+  getActivity(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getActivityLogs(id);
+  }
+
   // ── Stage CRUD ──
 
   @Post(':id/stages')

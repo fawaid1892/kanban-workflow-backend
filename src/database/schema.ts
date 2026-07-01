@@ -100,3 +100,19 @@ export const workflowSettings = pgTable('workflow_settings', {
     .defaultNow()
     .notNull(),
 });
+
+// ── Activity Log / Audit Trail ──
+export const activityLog = pgTable('activity_log', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  action: text('action').notNull(),
+  entityType: text('entity_type').notNull(),
+  entityId: text('entity_id'),
+  details: jsonb('details'),
+  createdAt: timestamp('created_at', { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+}, (t) => ({
+  workflowIdIdx: index('activity_log_workflow_id_idx').on(t.workflowId),
+}));

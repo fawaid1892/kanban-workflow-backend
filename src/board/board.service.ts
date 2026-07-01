@@ -200,6 +200,39 @@ export class BoardService {
     }
   }
 
+  async bulkUpdateStatus(workflowId: number, taskIds: string[], status: string): Promise<{ updated: number }> {
+    if (!this.hermesAvailable) return { updated: 0 };
+    let updated = 0;
+    for (const taskId of taskIds) {
+      try {
+        await execFileAsync('hermes', ['kanban', 'update', taskId, '--board', this.boardSlug(workflowId), '--status', status], {
+          timeout: 10_000,
+          env: { ...process.env },
+        });
+        updated++;
+      } catch (err: unknown) {
+        this.logger.error(`Failed to update task ${taskId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    this.cache.clear();
+    return { updated };
+  }
+
+  async updateTaskPriority(workflowId: number, taskId: string, priority: number): Promise<{ ok: boolean }> {
+    if (!this.hermesAvailable) return { ok: false };
+    try {
+      await execFileAsync('hermes', ['kanban', 'update', taskId, '--board', this.boardSlug(workflowId), '--priority', String(priority)], {
+        timeout: 10_000,
+        env: { ...process.env },
+      });
+      this.cache.clear();
+      return { ok: true };
+    } catch (err: unknown) {
+      this.logger.error(`Failed to update priority: ${err instanceof Error ? err.message : String(err)}`);
+      return { ok: false };
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private mapTask(raw: any): BoardTask {
     return {

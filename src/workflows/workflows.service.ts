@@ -694,4 +694,85 @@ export class WorkflowsService {
     for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
+
+  private async resolveNextActivityId(): Promise<number> {
+    const all = await this.db.select({ id: schema.activityLog.id }).from(schema.activityLog);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  // ── Analytics ──
+
+  async getAnalytics(workflowId: number) {
+    await this.findWorkflowOrThrow(workflowId);
+    const runs = await this.db
+      .select()
+      .from(schema.workflowRuns)
+      .where(eq(schema.workflowRuns.workflowId, workflowId));
+
+    const completed = runs.filter((r) => r.status === 'completed');
+    const failed = runs.filter((r) => r.status === 'failed');
+    const running = runs.filter((r) => r.status === 'running');
+    const successRate = runs.length > 0 ? Math.round((completed.length / runs.length) * 100) : 0;
+
+    let avgDurationSeconds = 0;
+    if (completed.length > 0) {
+      const totalDuration = completed.reduce((sum, r) => {
+        if (r.completedAt && r.createdAt) {
+          return sum + (new Date(r.completedAt).getTime() - new Date(r.createdAt).getTime()) / 1000;
+        }
+        return sum;
+      }, 0);
+      avgDurationSeconds = Math.round(totalDuration / completed.length);
+    }
+
+    // Runs per day (last 30 days)
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const recentRuns = runs.filter((r) => new Date(r.createdAt) >= thirtyDaysAgo);
+    const runsPerDayMap = new Map<string, number>();
+    for (const r of recentRuns) {
+      const date = new Date(r.createdAt).toISOString().split('T')[0];
+      runsPerDayMap.set(date, (runsPerDayMap.get(date) ?? 0) + 1);
+    }
+    const runsPerDay = Array.from(runsPerDayMap.entries())
+      .map(([date, count]) => ({ date, count }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    return {
+      totalRuns: runs.length,
+      completedRuns: completed.length,
+      failedRuns: failed.length,
+      runningRuns: running.length,
+      successRate,
+      avgDurationSeconds,
+      runsPerDay,
+    };
+  }
+
+  // ── Activity Log ──
+
+  async logActivity(workflowId: number, action: string, entityType: string, entityId?: string, details?: any) {
+    const nextId = await this.resolveNextActivityId();
+    await this.db.insert(schema.activityLog).values({
+      id: nextId,
+      workflowId,
+      action,
+      entityType,
+      entityId: entityId ?? null,
+      details: details ?? null,
+    });
+  }
+
+  async getActivityLogs(workflowId: number, limit = 50) {
+    await this.findWorkflowOrThrow(workflowId);
+    return this.db
+      .select()
+      .from(schema.activityLog)
+      .where(eq(schema.activityLog.workflowId, workflowId))
+      .orderBy(schema.activityLog.createdAt)
+      .limit(limit);
+  }
 }
