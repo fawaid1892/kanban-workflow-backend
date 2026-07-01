@@ -1105,4 +1105,112 @@ export class WorkflowsService {
     }
     return result;
   }
+
+  // ── Dashboard ──
+
+  async getDashboard() {
+    const workflows = await this.db.select().from(schema.workflows);
+    const allRuns = await this.db.select().from(schema.workflowRuns);
+    const activeWorkflows = workflows.filter((w) => !w.isArchived);
+    const completedRuns = allRuns.filter((r) => r.status === 'completed');
+    const overallSuccessRate = allRuns.length > 0 ? Math.round((completedRuns.length / allRuns.length) * 100) : 0;
+
+    // Recent runs (last 10)
+    const recentRuns = allRuns
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 10)
+      .map((r) => {
+        const wf = workflows.find((w) => w.id === r.workflowId);
+        return { workflowName: wf?.name ?? 'Unknown', status: r.status, createdAt: r.createdAt };
+      });
+
+    // Top workflows by run count
+    const runCounts = new Map<number, number>();
+    for (const r of allRuns) {
+      const wfId = r.workflowId as number;
+      runCounts.set(wfId, (runCounts.get(wfId) ?? 0) + 1);
+    }
+    const topWorkflows = Array.from(runCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([wfId, count]) => ({ name: workflows.find((w) => w.id === wfId)?.name ?? 'Unknown', runCount: count }));
+
+    return {
+      totalWorkflows: workflows.length,
+      activeWorkflows: activeWorkflows.length,
+      totalRuns: allRuns.length,
+      overallSuccessRate,
+      recentRuns,
+      topWorkflows,
+    };
+  }
+
+  // ── Notes ──
+
+  async updateNotes(workflowId: number, notes: string) {
+    await this.db.update(schema.workflows).set({ notes }).where(eq(schema.workflows.id, workflowId));
+    return { notes };
+  }
+
+  // ── Sharing ──
+
+  async getShares(workflowId: number) {
+    return this.db.select().from(schema.workflowShares)
+      .where(eq(schema.workflowShares.workflowId, workflowId));
+  }
+
+  async addShare(workflowId: number, userId: string, permission: string) {
+    const nextId = await this.resolveNextShareId();
+    await this.db.insert(schema.workflowShares).values({
+      id: nextId, workflowId, userId, permission,
+    });
+    return { userId, permission };
+  }
+
+  async removeShare(workflowId: number, shareId: number) {
+    await this.db.delete(schema.workflowShares).where(eq(schema.workflowShares.id, shareId));
+    return { deleted: true };
+  }
+
+  // ── Recurring Tasks ──
+
+  async getRecurring(workflowId: number) {
+    return this.db.select().from(schema.recurringTasks)
+      .where(eq(schema.recurringTasks.workflowId, workflowId));
+  }
+
+  async createRecurring(workflowId: number, data: { stageId: number; interval: string }) {
+    const nextId = await this.resolveNextRecurringId();
+    const nextRunAt = new Date();
+    if (data.interval === 'daily') nextRunAt.setDate(nextRunAt.getDate() + 1);
+    else if (data.interval === 'weekly') nextRunAt.setDate(nextRunAt.getDate() + 7);
+    else if (data.interval === 'monthly') nextRunAt.setMonth(nextRunAt.getMonth() + 1);
+
+    await this.db.insert(schema.recurringTasks).values({
+      id: nextId, workflowId, stageId: data.stageId,
+      interval: data.interval, nextRunAt,
+    });
+    return { id: nextId, interval: data.interval, nextRunAt };
+  }
+
+  async deleteRecurring(workflowId: number, recurringId: number) {
+    await this.db.delete(schema.recurringTasks).where(eq(schema.recurringTasks.id, recurringId));
+    return { deleted: true };
+  }
+
+  private async resolveNextShareId(): Promise<number> {
+    const all = await this.db.select({ id: schema.workflowShares.id }).from(schema.workflowShares);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  private async resolveNextRecurringId(): Promise<number> {
+    const all = await this.db.select({ id: schema.recurringTasks.id }).from(schema.recurringTasks);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
 }

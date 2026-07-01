@@ -115,6 +115,52 @@ export class WorkflowsController {
     return this.workflowsService.exportAll();
   }
 
+  // Dashboard
+  @Get('dashboard')
+  getDashboard() {
+    return this.workflowsService.getDashboard();
+  }
+
+  // Notes
+  @Put(':id/notes')
+  updateNotes(@Param('id', ParseIntPipe) id: number, @Body('notes') notes: string) {
+    return this.workflowsService.updateNotes(id, notes);
+  }
+
+  // Sharing
+  @Get(':id/shares')
+  getShares(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getShares(id);
+  }
+
+  @Post(':id/shares')
+  @HttpCode(HttpStatus.CREATED)
+  addShare(@Param('id', ParseIntPipe) id: number, @Body('userId') userId: string, @Body('permission') permission: string) {
+    return this.workflowsService.addShare(id, userId, permission);
+  }
+
+  @Delete(':id/shares/:sid')
+  removeShare(@Param('id', ParseIntPipe) id: number, @Param('sid', ParseIntPipe) sid: number) {
+    return this.workflowsService.removeShare(id, sid);
+  }
+
+  // Recurring
+  @Get(':id/recurring')
+  getRecurring(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getRecurring(id);
+  }
+
+  @Post(':id/recurring')
+  @HttpCode(HttpStatus.CREATED)
+  createRecurring(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.workflowsService.createRecurring(id, dto);
+  }
+
+  @Delete(':id/recurring/:rid')
+  deleteRecurring(@Param('id', ParseIntPipe) id: number, @Param('rid', ParseIntPipe) rid: number) {
+    return this.workflowsService.deleteRecurring(id, rid);
+  }
+
   // Webhook
   @Get(':id/webhook')
   getWebhook(@Param('id', ParseIntPipe) id: number) {

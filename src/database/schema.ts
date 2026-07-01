@@ -15,6 +15,7 @@ export const workflows = pgTable('workflows', {
   id: bigint('id', { mode: 'number' }).primaryKey(),
   name: text('name').notNull(),
   description: text('description'),
+  notes: text('notes'),
   isFavorite: boolean('is_favorite').default(false),
   isArchived: boolean('is_archived').default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
@@ -185,4 +186,32 @@ export const taskTimeLogs = pgTable('task_time_logs', {
 }, (t) => ({
   workflowIdIdx: index('task_time_logs_workflow_id_idx').on(t.workflowId),
   taskIdIdx: index('task_time_logs_task_id_idx').on(t.taskId),
+}));
+
+// ── Workflow Shares ──
+export const workflowShares = pgTable('workflow_shares', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  permission: text('permission').default('viewer').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  workflowIdIdx: index('workflow_shares_workflow_id_idx').on(t.workflowId),
+  uniq: unique('workflow_shares_uniq').on(t.workflowId, t.userId),
+}));
+
+// ── Recurring Tasks ──
+export const recurringTasks = pgTable('recurring_tasks', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  stageId: bigint('stage_id', { mode: 'number' })
+    .references(() => workflowStages.id, { onDelete: 'cascade' }),
+  interval: text('interval').notNull(),
+  nextRunAt: timestamp('next_run_at', { withTimezone: true }).notNull(),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  workflowIdIdx: index('recurring_tasks_workflow_id_idx').on(t.workflowId),
 }));
