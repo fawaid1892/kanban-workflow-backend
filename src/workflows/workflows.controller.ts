@@ -9,6 +9,7 @@ import { CreateStageDto } from './dto/create-stage.dto';
 import { UpdateStageDto } from './dto/update-stage.dto';
 import { SetDependenciesDto } from './dto/set-dependencies.dto';
 import { RunWorkflowDto } from './dto/run-workflow.dto';
+import { UpdateSettingsDto } from './dto/update-settings.dto';
 import { WorkflowSettingsService } from './workflow-settings.service';
 
 @Controller('workflows')
@@ -143,7 +144,7 @@ export class WorkflowsController {
   updateSettings(
     @Param('id', ParseIntPipe) id: number,
     @Body(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true }))
-    dto: { baseUrl: string; apiKey: string; chatSchema: string },
+    dto: UpdateSettingsDto,
   ) {
     return this.settingsService.updateSettings(id, dto);
   }
