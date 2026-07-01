@@ -7,6 +7,7 @@ import {
   timestamp,
   jsonb,
   unique,
+  index,
 } from 'drizzle-orm/pg-core';
 
 // ── Workflow (project) ──
@@ -40,7 +41,9 @@ export const workflowStages = pgTable('workflow_stages', {
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
-});
+}, (t) => ({
+  workflowIdIdx: index('workflow_stages_workflow_id_idx').on(t.workflowId),
+}));
 
 // ── Dependencies between stages ──
 export const stageDependencies = pgTable(
@@ -56,6 +59,8 @@ export const stageDependencies = pgTable(
   },
   (t) => ({
     uniq: unique('stage_parent_uniq').on(t.stageId, t.parentId),
+    stageIdIdx: index('stage_dependencies_stage_id_idx').on(t.stageId),
+    parentIdIdx: index('stage_dependencies_parent_id_idx').on(t.parentId),
   }),
 );
 
@@ -73,7 +78,10 @@ export const workflowRuns = pgTable('workflow_runs', {
     .defaultNow()
     .notNull(),
   completedAt: timestamp('completed_at', { withTimezone: true }),
-});
+}, (t) => ({
+  workflowIdIdx: index('workflow_runs_workflow_id_idx').on(t.workflowId),
+  statusIdx: index('workflow_runs_status_idx').on(t.status),
+}));
 
 // ── Settings per workflow ──
 export const workflowSettings = pgTable('workflow_settings', {
