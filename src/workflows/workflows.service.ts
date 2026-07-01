@@ -775,4 +775,140 @@ export class WorkflowsService {
       .orderBy(schema.activityLog.createdAt)
       .limit(limit);
   }
+
+  // ── Versions ──
+
+  async snapshotVersion(workflowId: number, changeSummary?: string) {
+    const stages = await this.db.select().from(schema.workflowStages)
+      .where(eq(schema.workflowStages.workflowId, workflowId))
+      .orderBy(asc(schema.workflowStages.sortOrder));
+    const allDeps = await this.db.select().from(schema.stageDependencies);
+    const stageIds = new Set(stages.map((s) => s.id));
+    const deps = allDeps.filter((d) => stageIds.has(d.stageId) && stageIds.has(d.parentId));
+
+    const existingVersions = await this.db.select().from(schema.workflowVersions)
+      .where(eq(schema.workflowVersions.workflowId, workflowId));
+    const nextVersion = existingVersions.length + 1;
+    const nextId = await this.resolveNextVersionId();
+
+    await this.db.insert(schema.workflowVersions).values({
+      id: nextId, workflowId, version: nextVersion,
+      stagesSnapshot: stages, depsSnapshot: deps,
+      changeSummary: changeSummary ?? null,
+    });
+    return { version: nextVersion };
+  }
+
+  async getVersions(workflowId: number) {
+    await this.findWorkflowOrThrow(workflowId);
+    return this.db.select().from(schema.workflowVersions)
+      .where(eq(schema.workflowVersions.workflowId, workflowId))
+      .orderBy(schema.workflowVersions.createdAt);
+  }
+
+  async getVersion(workflowId: number, versionId: number) {
+    const [version] = await this.db.select().from(schema.workflowVersions)
+      .where(eq(schema.workflowVersions.id, versionId)).limit(1);
+    if (!version) throw new NotFoundException(`Version ${versionId} not found`);
+    return version;
+  }
+
+  // ── Webhook ──
+
+  async getWebhook(workflowId: number) {
+    const [config] = await this.db.select().from(schema.webhookConfigs)
+      .where(eq(schema.webhookConfigs.workflowId, workflowId)).limit(1);
+    return config ?? null;
+  }
+
+  async upsertWebhook(workflowId: number, data: { url: string; secret?: string; events?: string[]; isActive?: boolean }) {
+    const existing = await this.getWebhook(workflowId);
+    if (existing) {
+      await this.db.update(schema.webhookConfigs).set({
+        url: data.url, secret: data.secret ?? existing.secret,
+        events: data.events ?? existing.events, isActive: data.isActive ?? existing.isActive,
+      }).where(eq(schema.webhookConfigs.workflowId, workflowId));
+    } else {
+      const nextId = await this.resolveNextWebhookId();
+      await this.db.insert(schema.webhookConfigs).values({
+        id: nextId, workflowId, url: data.url, secret: data.secret ?? null,
+        events: data.events ?? ['run.completed', 'run.failed'], isActive: data.isActive ?? true,
+      });
+    }
+    return this.getWebhook(workflowId);
+  }
+
+  async triggerWebhook(workflowId: number, event: string, payload: Record<string, unknown>) {
+    const config = await this.getWebhook(workflowId);
+    if (!config || !config.isActive || !config.events?.includes(event)) return;
+    try {
+      const body = JSON.stringify({ event, workflowId, timestamp: new Date().toISOString(), ...payload });
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+      if (config.secret) {
+        const { createHmac } = await import('crypto');
+        headers['X-Webhook-Signature'] = createHmac('sha256', config.secret).update(body).digest('hex');
+      }
+      await fetch(config.url, { method: 'POST', headers, body, signal: AbortSignal.timeout(10_000) });
+      this.logger.log(`Webhook triggered: ${event} → ${config.url}`);
+    } catch (err: unknown) {
+      this.logger.error(`Webhook failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // ── Board Columns ──
+
+  async getColumns(workflowId: number) {
+    return this.db.select().from(schema.boardColumns)
+      .where(eq(schema.boardColumns.workflowId, workflowId))
+      .orderBy(schema.boardColumns.sortOrder);
+  }
+
+  async createColumn(workflowId: number, data: { key: string; label: string; color?: string }) {
+    const nextId = await this.resolveNextColumnId();
+    const maxSort = await this.db.select({ sortOrder: schema.boardColumns.sortOrder })
+      .from(schema.boardColumns).where(eq(schema.boardColumns.workflowId, workflowId));
+    const maxSortOrder = maxSort.reduce((max, r) => Math.max(max, r.sortOrder ?? 0), 0);
+    return this.db.insert(schema.boardColumns).values({
+      id: nextId, workflowId, key: data.key, label: data.label,
+      color: data.color ?? '#6b7280', sortOrder: maxSortOrder + 1, isDefault: false,
+    }).returning();
+  }
+
+  async deleteColumn(workflowId: number, columnId: number) {
+    await this.db.delete(schema.boardColumns)
+      .where(eq(schema.boardColumns.id, columnId));
+    return { deleted: true };
+  }
+
+  // ── Search ──
+
+  async searchWorkflows(query: string) {
+    return this.db.select().from(schema.workflows)
+      .where(query ? undefined : undefined)
+      .limit(20);
+  }
+
+  private async resolveNextVersionId(): Promise<number> {
+    const all = await this.db.select({ id: schema.workflowVersions.id }).from(schema.workflowVersions);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  private async resolveNextWebhookId(): Promise<number> {
+    const all = await this.db.select({ id: schema.webhookConfigs.id }).from(schema.webhookConfigs);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  private async resolveNextColumnId(): Promise<number> {
+    const all = await this.db.select({ id: schema.boardColumns.id }).from(schema.boardColumns);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
 }

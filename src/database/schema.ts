@@ -116,3 +116,46 @@ export const activityLog = pgTable('activity_log', {
 }, (t) => ({
   workflowIdIdx: index('activity_log_workflow_id_idx').on(t.workflowId),
 }));
+
+// ── Workflow Versions ──
+export const workflowVersions = pgTable('workflow_versions', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  version: integer('version').notNull(),
+  stagesSnapshot: jsonb('stages_snapshot').notNull(),
+  depsSnapshot: jsonb('deps_snapshot').notNull(),
+  changeSummary: text('change_summary'),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+}, (t) => ({
+  workflowIdIdx: index('workflow_versions_workflow_id_idx').on(t.workflowId),
+}));
+
+// ── Webhook Config ──
+export const webhookConfigs = pgTable('webhook_configs', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' })
+    .unique()
+    .notNull(),
+  url: text('url').notNull(),
+  secret: text('secret'),
+  events: text('events').array().default(['run.completed', 'run.failed']),
+  isActive: boolean('is_active').default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+});
+
+// ── Board Columns (custom) ──
+export const boardColumns = pgTable('board_columns', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  key: text('key').notNull(),
+  label: text('label').notNull(),
+  color: text('color').default('#6b7280'),
+  sortOrder: integer('sort_order').default(0),
+  isDefault: boolean('is_default').default(false),
+}, (t) => ({
+  workflowIdIdx: index('board_columns_workflow_id_idx').on(t.workflowId),
+  uniq: unique('board_columns_key_uniq').on(t.workflowId, t.key),
+}));

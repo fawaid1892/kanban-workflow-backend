@@ -87,6 +87,57 @@ export class WorkflowsController {
     return this.workflowsService.getActivityLogs(id);
   }
 
+  // Versions
+  @Post(':id/versions')
+  @HttpCode(HttpStatus.CREATED)
+  snapshotVersion(@Param('id', ParseIntPipe) id: number, @Body('changeSummary') summary?: string) {
+    return this.workflowsService.snapshotVersion(id, summary);
+  }
+
+  @Get(':id/versions')
+  getVersions(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getVersions(id);
+  }
+
+  @Get(':id/versions/:vid')
+  getVersion(@Param('id', ParseIntPipe) id: number, @Param('vid', ParseIntPipe) vid: number) {
+    return this.workflowsService.getVersion(id, vid);
+  }
+
+  // Webhook
+  @Get(':id/webhook')
+  getWebhook(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getWebhook(id);
+  }
+
+  @Put(':id/webhook')
+  upsertWebhook(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.workflowsService.upsertWebhook(id, dto);
+  }
+
+  // Columns
+  @Get(':id/columns')
+  getColumns(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getColumns(id);
+  }
+
+  @Post(':id/columns')
+  @HttpCode(HttpStatus.CREATED)
+  createColumn(@Param('id', ParseIntPipe) id: number, @Body() dto: any) {
+    return this.workflowsService.createColumn(id, dto);
+  }
+
+  @Delete(':id/columns/:cid')
+  deleteColumn(@Param('id', ParseIntPipe) id: number, @Param('cid', ParseIntPipe) cid: number) {
+    return this.workflowsService.deleteColumn(id, cid);
+  }
+
+  // Search
+  @Get('search')
+  search(@Query('q') q: string) {
+    return this.workflowsService.searchWorkflows(q ?? '');
+  }
+
   // ── Stage CRUD ──
 
   @Post(':id/stages')
