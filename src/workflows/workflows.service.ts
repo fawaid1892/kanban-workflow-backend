@@ -17,6 +17,7 @@ import { SetDependenciesDto } from './dto/set-dependencies.dto';
 import { RunWorkflowDto } from './dto/run-workflow.dto';
 import { parseTemplate } from './template-parser';
 import { createKanbanTask, setTaskParents, createBoard, createProfile } from './kanban-client';
+import { BoardGateway } from '../board/board.gateway';
 
 @Injectable()
 export class WorkflowsService {
@@ -24,6 +25,7 @@ export class WorkflowsService {
 
   constructor(
     @Inject(DRIZZLE) private readonly db: NodePgDatabase<typeof schema>,
+    private readonly boardGateway: BoardGateway,
   ) {}
 
   private boardSlug(workflowId: number): string {
@@ -98,6 +100,73 @@ export class WorkflowsService {
     await this.findWorkflowOrThrow(id);
     await this.db.delete(schema.workflows).where(eq(schema.workflows.id, id));
     return { deleted: true, id };
+  }
+
+  // ── Duplicate ──
+
+  async duplicate(workflowId: number) {
+    const original = await this.findWorkflowOrThrow(workflowId);
+
+    const stages = await this.db
+      .select()
+      .from(schema.workflowStages)
+      .where(eq(schema.workflowStages.workflowId, workflowId))
+      .orderBy(asc(schema.workflowStages.sortOrder));
+
+    const allDeps = await this.db
+      .select()
+      .from(schema.stageDependencies);
+
+    const stageIds = new Set(stages.map((s) => s.id));
+    const deps = allDeps.filter(
+      (d) => stageIds.has(d.stageId) && stageIds.has(d.parentId),
+    );
+
+    const newWorkflowId = await this.resolveNextWorkflowId();
+    const [newWorkflow] = await this.db
+      .insert(schema.workflows)
+      .values({
+        id: newWorkflowId,
+        name: `${original.name} (copy)`,
+        description: original.description,
+      })
+      .returning();
+
+    await createBoard(this.boardSlug(newWorkflowId), newWorkflow.name);
+
+    const stageIdMap = new Map<number, number>();
+    for (const stage of stages) {
+      const newStageId = await this.resolveNextStageId();
+      stageIdMap.set(stage.id, newStageId);
+      await this.db.insert(schema.workflowStages).values({
+        id: newStageId,
+        workflowId: newWorkflowId,
+        titleTemplate: stage.titleTemplate,
+        roleSlug: stage.roleSlug,
+        roleLabel: stage.roleLabel,
+        initialStatus: stage.initialStatus,
+        maxRuntime: stage.maxRuntime,
+        maxRetries: stage.maxRetries,
+        skills: stage.skills,
+        goalMode: stage.goalMode,
+        sortOrder: stage.sortOrder,
+      });
+    }
+
+    for (const dep of deps) {
+      const newStageId = stageIdMap.get(dep.stageId);
+      const newParentId = stageIdMap.get(dep.parentId);
+      if (newStageId && newParentId) {
+        const nextDepId = await this.resolveNextDepId();
+        await this.db.insert(schema.stageDependencies).values({
+          id: nextDepId,
+          stageId: newStageId,
+          parentId: newParentId,
+        });
+      }
+    }
+
+    return this.findOne(newWorkflowId);
   }
 
   // ── Stage CRUD ──
@@ -313,6 +382,8 @@ export class WorkflowsService {
         .update(schema.workflowRuns)
         .set({ status: 'failed', completedAt: new Date() })
         .where(eq(schema.workflowRuns.id, runId));
+      this.boardGateway.broadcastRunComplete(workflowId, runId);
+      this.boardGateway.broadcastBoardUpdate(workflowId);
     });
 
     return { runId, status: 'running' };
@@ -364,6 +435,8 @@ export class WorkflowsService {
       .set({ taskIds: allTaskIds, status: 'completed', completedAt: new Date() })
       .where(eq(schema.workflowRuns.id, runId));
 
+    this.boardGateway.broadcastRunComplete(workflowId, runId);
+    this.boardGateway.broadcastBoardUpdate(workflowId);
     this.logger.log(`Workflow run ${runId} completed: ${allTaskIds.length} tasks created`);
   }
 

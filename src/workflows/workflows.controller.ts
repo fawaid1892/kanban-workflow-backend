@@ -55,6 +55,12 @@ export class WorkflowsController {
     return this.workflowsService.remove(id);
   }
 
+  @Post(':id/duplicate')
+  @HttpCode(HttpStatus.CREATED)
+  duplicate(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.duplicate(id);
+  }
+
   // ── Stage CRUD ──
 
   @Post(':id/stages')
