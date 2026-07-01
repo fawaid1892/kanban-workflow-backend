@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, Logger } from '@nestjs/common';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import compression from 'compression';
 import { AppModule } from './app.module';
 import { RateLimitMiddleware } from './common/rate-limit.middleware';
 import { GlobalExceptionFilter } from './common/global-exception.filter';
@@ -12,6 +13,7 @@ async function bootstrap() {
   const logger = new Logger('Bootstrap');
 
   app.setGlobalPrefix('api');
+  app.use(compression());
 
   // CORS
   app.enableCors({

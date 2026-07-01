@@ -4,6 +4,7 @@ import { DatabaseModule } from './database/database.module';
 import { WorkflowsModule } from './workflows/workflows.module';
 import { BoardModule } from './board/board.module';
 import { AppController } from './app.controller';
+import { CacheService } from './common/cache.service';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { AppController } from './app.controller';
     BoardModule,
   ],
   controllers: [AppController],
-  providers: [],
+  providers: [CacheService],
+  exports: [CacheService],
 })
 export class AppModule {}
