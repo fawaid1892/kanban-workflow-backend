@@ -1048,4 +1048,61 @@ export class WorkflowsService {
     for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
+
+  private async resolveNextSettingsId(): Promise<number> {
+    const all = await this.db.select({ id: schema.workflowSettings.id }).from(schema.workflowSettings);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  // ── Version Comparison ──
+
+  async compareVersions(workflowId: number, v1: number, v2: number) {
+    const versions = await this.db.select().from(schema.workflowVersions)
+      .where(eq(schema.workflowVersions.workflowId, workflowId));
+    const version1 = versions.find((v) => v.version === v1);
+    const version2 = versions.find((v) => v.version === v2);
+    if (!version1 || !version2) throw new NotFoundException('Version not found');
+
+    const stages1 = (version1.stagesSnapshot as any[]) ?? [];
+    const stages2 = (version2.stagesSnapshot as any[]) ?? [];
+
+    const map1 = new Map(stages1.map((s: any) => [s.roleSlug, s]));
+    const map2 = new Map(stages2.map((s: any) => [s.roleSlug, s]));
+
+    const added = stages2.filter((s: any) => !map1.has(s.roleSlug));
+    const removed = stages1.filter((s: any) => !map2.has(s.roleSlug));
+    const unchanged: any[] = [];
+    const changed: { before: any; after: any; diff: string[] }[] = [];
+
+    for (const [slug, s2] of map2) {
+      const s1 = map1.get(slug);
+      if (!s1) continue;
+      const diffs: string[] = [];
+      for (const key of ['titleTemplate', 'roleLabel', 'initialStatus', 'maxRuntime', 'maxRetries', 'goalMode']) {
+        if (JSON.stringify(s1[key]) !== JSON.stringify(s2[key])) diffs.push(key);
+      }
+      if (diffs.length > 0) changed.push({ before: s1, after: s2, diff: diffs });
+      else unchanged.push(s2);
+    }
+
+    return {
+      version1: { id: version1.id, version: v1, createdAt: version1.createdAt },
+      version2: { id: version2.id, version: v2, createdAt: version2.createdAt },
+      added, removed, changed, unchanged,
+    };
+  }
+
+  // ── Batch Export ──
+
+  async exportAll() {
+    const workflows = await this.db.select().from(schema.workflows);
+    const result: any[] = [];
+    for (const wf of workflows) {
+      result.push(await this.exportWorkflow(wf.id));
+    }
+    return result;
+  }
 }

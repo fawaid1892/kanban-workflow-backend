@@ -104,6 +104,17 @@ export class WorkflowsController {
     return this.workflowsService.getVersion(id, vid);
   }
 
+  @Get(':id/versions/compare')
+  compareVersions(@Param('id', ParseIntPipe) id: number, @Query('v1') v1: string, @Query('v2') v2: string) {
+    return this.workflowsService.compareVersions(id, parseInt(v1), parseInt(v2));
+  }
+
+  // Batch Export
+  @Get('export-all')
+  exportAll() {
+    return this.workflowsService.exportAll();
+  }
+
   // Webhook
   @Get(':id/webhook')
   getWebhook(@Param('id', ParseIntPipe) id: number) {
