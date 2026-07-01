@@ -95,8 +95,94 @@ DO $$ BEGIN
   -- Remove old assignee_slug column if exists
   ALTER TABLE "workflow_stages" DROP COLUMN IF EXISTS "assignee_slug";
   ALTER TABLE "workflow_stages" DROP COLUMN IF EXISTS "workspace_kind";
+  -- Add new columns to workflows
+  ALTER TABLE "workflows" ADD COLUMN IF NOT EXISTS "notes" text;
+  ALTER TABLE "workflows" ADD COLUMN IF NOT EXISTS "is_favorite" boolean DEFAULT false;
+  ALTER TABLE "workflows" ADD COLUMN IF NOT EXISTS "is_archived" boolean DEFAULT false;
 EXCEPTION WHEN others THEN NULL;
 END $$;
+
+-- New tables for Sprint 7-11 features
+CREATE TABLE IF NOT EXISTS "activity_log" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "action" text NOT NULL,
+  "entity_type" text NOT NULL,
+  "entity_id" text,
+  "details" jsonb,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "activity_log_workflow_id_idx" ON "activity_log" ("workflow_id");
+
+CREATE TABLE IF NOT EXISTS "workflow_versions" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "version" integer NOT NULL,
+  "stages_snapshot" jsonb NOT NULL,
+  "deps_snapshot" jsonb NOT NULL,
+  "change_summary" text,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "workflow_versions_workflow_id_idx" ON "workflow_versions" ("workflow_id");
+
+CREATE TABLE IF NOT EXISTS "webhook_configs" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade UNIQUE,
+  "url" text NOT NULL,
+  "secret" text,
+  "events" text[] DEFAULT ARRAY['run.completed','run.failed'],
+  "is_active" boolean DEFAULT true,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS "board_columns" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "key" text NOT NULL,
+  "label" text NOT NULL,
+  "color" text DEFAULT '#6b7280',
+  "sort_order" integer DEFAULT 0,
+  "is_default" boolean DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS "board_columns_workflow_id_idx" ON "board_columns" ("workflow_id");
+
+CREATE TABLE IF NOT EXISTS "workflow_tags" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "tag" text NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "workflow_tags_workflow_id_idx" ON "workflow_tags" ("workflow_id");
+
+CREATE TABLE IF NOT EXISTS "task_time_logs" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "task_id" text NOT NULL,
+  "started_at" timestamp with time zone NOT NULL,
+  "completed_at" timestamp with time zone,
+  "duration_seconds" integer
+);
+CREATE INDEX IF NOT EXISTS "task_time_logs_workflow_id_idx" ON "task_time_logs" ("workflow_id");
+CREATE INDEX IF NOT EXISTS "task_time_logs_task_id_idx" ON "task_time_logs" ("task_id");
+
+CREATE TABLE IF NOT EXISTS "workflow_shares" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "user_id" text NOT NULL,
+  "permission" text DEFAULT 'viewer' NOT NULL,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "workflow_shares_workflow_id_idx" ON "workflow_shares" ("workflow_id");
+
+CREATE TABLE IF NOT EXISTS "recurring_tasks" (
+  "id" bigint PRIMARY KEY NOT NULL,
+  "workflow_id" bigint REFERENCES "workflows"("id") ON DELETE cascade,
+  "stage_id" bigint REFERENCES "workflow_stages"("id") ON DELETE cascade,
+  "interval" text NOT NULL,
+  "next_run_at" timestamp with time zone NOT NULL,
+  "is_active" boolean DEFAULT true,
+  "created_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "recurring_tasks_workflow_id_idx" ON "recurring_tasks" ("workflow_id");
 `;
 
 @Module({
