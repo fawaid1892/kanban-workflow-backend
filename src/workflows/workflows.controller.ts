@@ -138,6 +138,51 @@ export class WorkflowsController {
     return this.workflowsService.searchWorkflows(q ?? '');
   }
 
+  // Tags
+  @Get('tags')
+  getAllTags() {
+    return this.workflowsService.getAllTags();
+  }
+
+  @Get(':id/tags')
+  getTags(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getTags(id);
+  }
+
+  @Post(':id/tags')
+  @HttpCode(HttpStatus.CREATED)
+  addTag(@Param('id', ParseIntPipe) id: number, @Body('tag') tag: string) {
+    return this.workflowsService.addTag(id, tag);
+  }
+
+  @Delete(':id/tags/:tag')
+  removeTag(@Param('id', ParseIntPipe) id: number, @Param('tag') tag: string) {
+    return this.workflowsService.removeTag(id, tag);
+  }
+
+  // Favorites + Archive
+  @Put(':id/favorite')
+  toggleFavorite(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.toggleFavorite(id);
+  }
+
+  @Put(':id/archive')
+  toggleArchive(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.toggleArchive(id);
+  }
+
+  // Gantt
+  @Get(':id/gantt')
+  getGantt(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getGantt(id);
+  }
+
+  // Time Tracking
+  @Get(':id/time-logs')
+  getTimeLogs(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.getTimeLogs(id);
+  }
+
   // ── Stage CRUD ──
 
   @Post(':id/stages')

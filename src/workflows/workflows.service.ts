@@ -911,4 +911,141 @@ export class WorkflowsService {
     for (const r of all) { if (r.id > maxId) maxId = r.id; }
     return maxId + 1;
   }
+
+  // ── Tags ──
+
+  async getTags(workflowId: number) {
+    return this.db.select().from(schema.workflowTags)
+      .where(eq(schema.workflowTags.workflowId, workflowId));
+  }
+
+  async addTag(workflowId: number, tag: string) {
+    const nextId = await this.resolveNextTagId();
+    await this.db.insert(schema.workflowTags).values({ id: nextId, workflowId, tag });
+    return { tag };
+  }
+
+  async removeTag(workflowId: number, tag: string) {
+    await this.db.delete(schema.workflowTags)
+      .where(eq(schema.workflowTags.workflowId, workflowId));
+    return { deleted: true };
+  }
+
+  async getAllTags() {
+    const all = await this.db.select({ tag: schema.workflowTags.tag }).from(schema.workflowTags);
+    return [...new Set(all.map((r) => r.tag))].sort();
+  }
+
+  // ── Favorites + Archive ──
+
+  async toggleFavorite(workflowId: number) {
+    const [wf] = await this.db.select().from(schema.workflows)
+      .where(eq(schema.workflows.id, workflowId)).limit(1);
+    if (!wf) throw new NotFoundException(`Workflow ${workflowId} not found`);
+    const newVal = !wf.isFavorite;
+    await this.db.update(schema.workflows).set({ isFavorite: newVal })
+      .where(eq(schema.workflows.id, workflowId));
+    return { isFavorite: newVal };
+  }
+
+  async toggleArchive(workflowId: number) {
+    const [wf] = await this.db.select().from(schema.workflows)
+      .where(eq(schema.workflows.id, workflowId)).limit(1);
+    if (!wf) throw new NotFoundException(`Workflow ${workflowId} not found`);
+    const newVal = !wf.isArchived;
+    await this.db.update(schema.workflows).set({ isArchived: newVal })
+      .where(eq(schema.workflows.id, workflowId));
+    return { isArchived: newVal };
+  }
+
+  async findAllFiltered(filters?: { favorite?: boolean; archived?: boolean }) {
+    let results = await this.db.select().from(schema.workflows)
+      .orderBy(schema.workflows.isFavorite, asc(schema.workflows.createdAt));
+    if (filters?.favorite) results = results.filter((r) => r.isFavorite);
+    if (filters?.archived === false) results = results.filter((r) => !r.isArchived);
+    if (filters?.archived === true) results = results.filter((r) => r.isArchived);
+    return results;
+  }
+
+  // ── Gantt ──
+
+  async getGantt(workflowId: number) {
+    await this.findWorkflowOrThrow(workflowId);
+    const stages = await this.db.select().from(schema.workflowStages)
+      .where(eq(schema.workflowStages.workflowId, workflowId))
+      .orderBy(asc(schema.workflowStages.sortOrder));
+    const allDeps = await this.db.select().from(schema.stageDependencies);
+    const stageIds = new Set(stages.map((s) => s.id));
+    const deps = allDeps.filter((d) => stageIds.has(d.stageId) && stageIds.has(d.parentId));
+
+    // Calculate start/end days based on dependencies
+    const dayMap = new Map<number, { start: number; end: number }>();
+    for (const stage of stages) {
+      const parentDeps = deps.filter((d) => d.stageId === stage.id);
+      if (parentDeps.length === 0) {
+        dayMap.set(stage.id, { start: 0, end: 1 });
+      } else {
+        const maxEnd = Math.max(...parentDeps.map((d) => dayMap.get(d.parentId)?.end ?? 0));
+        dayMap.set(stage.id, { start: maxEnd, end: maxEnd + 1 });
+      }
+    }
+
+    const totalDays = Math.max(...Array.from(dayMap.values()).map((d) => d.end), 1);
+
+    return {
+      stages: stages.map((s) => ({
+        id: s.id,
+        label: s.roleLabel,
+        titleTemplate: s.titleTemplate,
+        startDay: dayMap.get(s.id)?.start ?? 0,
+        endDay: dayMap.get(s.id)?.end ?? 1,
+        assignee: s.roleSlug,
+      })),
+      dependencies: deps.map((d) => ({ from: d.parentId, to: d.stageId })),
+      totalDays,
+    };
+  }
+
+  // ── Time Tracking ──
+
+  async getTimeLogs(workflowId: number) {
+    return this.db.select().from(schema.taskTimeLogs)
+      .where(eq(schema.taskTimeLogs.workflowId, workflowId))
+      .orderBy(schema.taskTimeLogs.startedAt);
+  }
+
+  async startTimeLog(workflowId: number, taskId: string) {
+    const nextId = await this.resolveNextTimeLogId();
+    await this.db.insert(schema.taskTimeLogs).values({
+      id: nextId, workflowId, taskId, startedAt: new Date(),
+    });
+  }
+
+  async completeTimeLog(taskId: string) {
+    const [log] = await this.db.select().from(schema.taskTimeLogs)
+      .where(eq(schema.taskTimeLogs.taskId, taskId)).limit(1);
+    if (log && !log.completedAt) {
+      const now = new Date();
+      const duration = Math.round((now.getTime() - new Date(log.startedAt).getTime()) / 1000);
+      await this.db.update(schema.taskTimeLogs).set({
+        completedAt: now, durationSeconds: duration,
+      }).where(eq(schema.taskTimeLogs.id, log.id));
+    }
+  }
+
+  private async resolveNextTagId(): Promise<number> {
+    const all = await this.db.select({ id: schema.workflowTags.id }).from(schema.workflowTags);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
+
+  private async resolveNextTimeLogId(): Promise<number> {
+    const all = await this.db.select({ id: schema.taskTimeLogs.id }).from(schema.taskTimeLogs);
+    if (all.length === 0) return 1;
+    let maxId = 0;
+    for (const r of all) { if (r.id > maxId) maxId = r.id; }
+    return maxId + 1;
+  }
 }

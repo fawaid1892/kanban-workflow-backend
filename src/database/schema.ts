@@ -15,6 +15,8 @@ export const workflows = pgTable('workflows', {
   id: bigint('id', { mode: 'number' }).primaryKey(),
   name: text('name').notNull(),
   description: text('description'),
+  isFavorite: boolean('is_favorite').default(false),
+  isArchived: boolean('is_archived').default(false),
   createdAt: timestamp('created_at', { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -158,4 +160,29 @@ export const boardColumns = pgTable('board_columns', {
 }, (t) => ({
   workflowIdIdx: index('board_columns_workflow_id_idx').on(t.workflowId),
   uniq: unique('board_columns_key_uniq').on(t.workflowId, t.key),
+}));
+
+// ── Workflow Tags ──
+export const workflowTags = pgTable('workflow_tags', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  tag: text('tag').notNull(),
+}, (t) => ({
+  workflowIdIdx: index('workflow_tags_workflow_id_idx').on(t.workflowId),
+  uniq: unique('workflow_tags_uniq').on(t.workflowId, t.tag),
+}));
+
+// ── Task Time Logs ──
+export const taskTimeLogs = pgTable('task_time_logs', {
+  id: bigint('id', { mode: 'number' }).primaryKey(),
+  workflowId: bigint('workflow_id', { mode: 'number' })
+    .references(() => workflows.id, { onDelete: 'cascade' }),
+  taskId: text('task_id').notNull(),
+  startedAt: timestamp('started_at', { withTimezone: true }).notNull(),
+  completedAt: timestamp('completed_at', { withTimezone: true }),
+  durationSeconds: integer('duration_seconds'),
+}, (t) => ({
+  workflowIdIdx: index('task_time_logs_workflow_id_idx').on(t.workflowId),
+  taskIdIdx: index('task_time_logs_task_id_idx').on(t.taskId),
 }));
