@@ -102,6 +102,107 @@ export class WorkflowsService {
     return { deleted: true, id };
   }
 
+  // ── Export / Import ──
+
+  async exportWorkflow(workflowId: number) {
+    const workflow = await this.findWorkflowOrThrow(workflowId);
+    const stages = await this.db
+      .select()
+      .from(schema.workflowStages)
+      .where(eq(schema.workflowStages.workflowId, workflowId))
+      .orderBy(asc(schema.workflowStages.sortOrder));
+    const allDeps = await this.db.select().from(schema.stageDependencies);
+    const stageIds = new Set(stages.map((s) => s.id));
+    const deps = allDeps.filter((d) => stageIds.has(d.stageId) && stageIds.has(d.parentId));
+    const [settings] = await this.db
+      .select()
+      .from(schema.workflowSettings)
+      .where(eq(schema.workflowSettings.workflowId, workflowId))
+      .limit(1);
+    return {
+      name: workflow.name,
+      description: workflow.description,
+      stages: stages.map((s) => ({
+        titleTemplate: s.titleTemplate,
+        roleSlug: s.roleSlug,
+        roleLabel: s.roleLabel,
+        initialStatus: s.initialStatus,
+        maxRuntime: s.maxRuntime,
+        maxRetries: s.maxRetries,
+        skills: s.skills,
+        goalMode: s.goalMode,
+        sortOrder: s.sortOrder,
+      })),
+      dependencies: deps.map((d) => ({
+        parentIndex: stages.findIndex((s) => s.id === d.parentId),
+        childIndex: stages.findIndex((s) => s.id === d.stageId),
+      })),
+      settings: settings ? { baseUrl: settings.baseUrl, chatSchema: settings.chatSchema } : null,
+    };
+  }
+
+  async importWorkflow(data: { name: string; description?: string; stages: any[]; dependencies?: any[]; settings?: any }) {
+    const newWorkflowId = await this.resolveNextWorkflowId();
+    const [newWorkflow] = await this.db
+      .insert(schema.workflows)
+      .values({ id: newWorkflowId, name: data.name, description: data.description ?? null })
+      .returning();
+    await createBoard(this.boardSlug(newWorkflowId), newWorkflow.name);
+    const newStageIds: number[] = [];
+    for (const stage of data.stages) {
+      const newStageId = await this.resolveNextStageId();
+      newStageIds.push(newStageId);
+      await this.db.insert(schema.workflowStages).values({
+        id: newStageId, workflowId: newWorkflowId,
+        titleTemplate: stage.titleTemplate, roleSlug: stage.roleSlug, roleLabel: stage.roleLabel,
+        initialStatus: stage.initialStatus ?? 'todo', maxRuntime: stage.maxRuntime ?? null,
+        maxRetries: stage.maxRetries ?? 2, skills: stage.skills ?? null, goalMode: stage.goalMode ?? false, sortOrder: stage.sortOrder ?? 0,
+      });
+    }
+    if (data.dependencies) {
+      for (const dep of data.dependencies) {
+        const stageId = newStageIds[dep.childIndex];
+        const parentId = newStageIds[dep.parentIndex];
+        if (stageId && parentId) {
+          const nextDepId = await this.resolveNextDepId();
+          await this.db.insert(schema.stageDependencies).values({ id: nextDepId, stageId, parentId });
+        }
+      }
+    }
+    return this.findOne(newWorkflowId);
+  }
+
+  getTemplates() {
+    return [
+      { id: 'feature-dev', name: 'Feature Development', description: 'Full feature cycle: spec → backend → frontend → QA → deploy',
+        stages: [
+          { titleTemplate: 'Spec: {featureName}', roleLabel: 'Spec', roleSlug: 'spec', initialStatus: 'triage', sortOrder: 0 },
+          { titleTemplate: 'Implement backend {featureName}', roleLabel: 'Backend', roleSlug: 'backend', initialStatus: 'todo', sortOrder: 1 },
+          { titleTemplate: 'Implement frontend {featureName}', roleLabel: 'Frontend', roleSlug: 'frontend', initialStatus: 'todo', sortOrder: 2 },
+          { titleTemplate: 'QA review {featureName}', roleLabel: 'QA', roleSlug: 'qa', initialStatus: 'todo', sortOrder: 3 },
+          { titleTemplate: 'Deploy {featureName}', roleLabel: 'DevOps', roleSlug: 'devops', initialStatus: 'todo', sortOrder: 4 },
+        ],
+        dependencies: [{ parentIndex: 0, childIndex: 1 }, { parentIndex: 0, childIndex: 2 }, { parentIndex: 1, childIndex: 3 }, { parentIndex: 2, childIndex: 3 }, { parentIndex: 3, childIndex: 4 }],
+      },
+      { id: 'bug-fix', name: 'Bug Fix', description: 'Quick bug fix: reproduce → fix → verify',
+        stages: [
+          { titleTemplate: 'Reproduce bug: {bugTitle}', roleLabel: 'QA', roleSlug: 'qa', initialStatus: 'todo', sortOrder: 0 },
+          { titleTemplate: 'Fix: {bugTitle}', roleLabel: 'Backend', roleSlug: 'backend', initialStatus: 'todo', sortOrder: 1 },
+          { titleTemplate: 'Verify fix: {bugTitle}', roleLabel: 'QA', roleSlug: 'qa', initialStatus: 'todo', sortOrder: 2 },
+        ],
+        dependencies: [{ parentIndex: 0, childIndex: 1 }, { parentIndex: 1, childIndex: 2 }],
+      },
+      { id: 'code-review', name: 'Code Review', description: 'Review and merge: review → test → merge',
+        stages: [
+          { titleTemplate: 'Review PR #{prNumber}', roleLabel: 'QA', roleSlug: 'qa', initialStatus: 'todo', sortOrder: 0 },
+          { titleTemplate: 'Test PR #{prNumber}', roleLabel: 'QA', roleSlug: 'qa', initialStatus: 'todo', sortOrder: 1 },
+          { titleTemplate: 'Merge PR #{prNumber}', roleLabel: 'DevOps', roleSlug: 'devops', initialStatus: 'todo', sortOrder: 2 },
+        ],
+        dependencies: [{ parentIndex: 0, childIndex: 1 }, { parentIndex: 1, childIndex: 2 }],
+      },
+    ];
+  }
+
   // ── Duplicate ──
 
   async duplicate(workflowId: number) {

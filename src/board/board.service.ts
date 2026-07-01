@@ -169,6 +169,37 @@ export class BoardService {
     return result;
   }
 
+  async updateTaskStatus(workflowId: number, taskId: string, status: string): Promise<{ ok: boolean }> {
+    if (!this.hermesAvailable) return { ok: false };
+    try {
+      await execFileAsync('hermes', ['kanban', 'update', taskId, '--board', this.boardSlug(workflowId), '--status', status], {
+        timeout: 10_000,
+        env: { ...process.env },
+      });
+      this.cache.delete(`tasks:${workflowId}:*`);
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to update task status: ${message}`);
+      return { ok: false };
+    }
+  }
+
+  async addComment(workflowId: number, taskId: string, body: string, author: string): Promise<{ ok: boolean }> {
+    if (!this.hermesAvailable) return { ok: false };
+    try {
+      await execFileAsync('hermes', ['kanban', 'comment', taskId, '--board', this.boardSlug(workflowId), '--author', author, '--body', body], {
+        timeout: 10_000,
+        env: { ...process.env },
+      });
+      return { ok: true };
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger.error(`Failed to add comment: ${message}`);
+      return { ok: false };
+    }
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private mapTask(raw: any): BoardTask {
     return {

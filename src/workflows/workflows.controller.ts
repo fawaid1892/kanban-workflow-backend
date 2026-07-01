@@ -61,6 +61,22 @@ export class WorkflowsController {
     return this.workflowsService.duplicate(id);
   }
 
+  @Get('templates')
+  getTemplates() {
+    return this.workflowsService.getTemplates();
+  }
+
+  @Get(':id/export')
+  exportWorkflow(@Param('id', ParseIntPipe) id: number) {
+    return this.workflowsService.exportWorkflow(id);
+  }
+
+  @Post('import')
+  @HttpCode(HttpStatus.CREATED)
+  importWorkflow(@Body() dto: any) {
+    return this.workflowsService.importWorkflow(dto);
+  }
+
   // ── Stage CRUD ──
 
   @Post(':id/stages')
